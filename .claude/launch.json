@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "survival",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["/Users/zamo/game-development/serve.py", "8123", "/Users/zamo/game-development"],
+      "port": 8123
+    }
+  ]
+}

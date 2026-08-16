@@ -1,0 +1,62 @@
+// station: 'hands' can be crafted anywhere; anything else needs that station
+// built at home and stood next to. lvl is the character level required.
+
+export const STATIONS = {
+  hands:     { name: 'By Hand',  icon: '👐' },
+  campfire:  { name: 'Campfire', icon: '🔥' },
+  workbench: { name: 'Workbench',icon: '🛠️' },
+  furnace:   { name: 'Furnace',  icon: '🏭' },
+};
+
+export const RECIPES = [
+  // ---- by hand --------------------------------------------------------
+  { station: 'hands', lvl: 1, xp: 4,  time: 1.2, out: { id: 'axe_stone', n: 1 },  in: [{ id: 'wood', n: 12 }, { id: 'stone', n: 8 }] },
+  { station: 'hands', lvl: 1, xp: 4,  time: 1.2, out: { id: 'pick_stone', n: 1 }, in: [{ id: 'wood', n: 12 }, { id: 'stone', n: 10 }] },
+  { station: 'hands', lvl: 1, xp: 3,  time: 0.8, out: { id: 'spear', n: 1 },      in: [{ id: 'wood', n: 14 }, { id: 'fiber', n: 6 }] },
+  { station: 'hands', lvl: 1, xp: 2,  time: 0.6, out: { id: 'rope', n: 1 },       in: [{ id: 'fiber', n: 8 }] },
+  { station: 'hands', lvl: 2, xp: 3,  time: 0.8, out: { id: 'bandage', n: 2 },    in: [{ id: 'cloth', n: 3 }, { id: 'fiber', n: 4 }] },
+  { station: 'hands', lvl: 2, xp: 5,  time: 1.0, out: { id: 'bag_small', n: 1 },  in: [{ id: 'cloth', n: 8 }, { id: 'rope', n: 2 }] },
+  { station: 'hands', lvl: 1, xp: 4,  time: 1.5, out: { id: 'campfire', n: 1 },   in: [{ id: 'wood', n: 20 }, { id: 'stone', n: 12 }] },
+  { station: 'hands', lvl: 2, xp: 8,  time: 2.5, out: { id: 'workbench', n: 1 },  in: [{ id: 'wood', n: 40 }, { id: 'stone', n: 20 }, { id: 'fiber', n: 10 }] },
+  { station: 'hands', lvl: 1, xp: 2,  time: 0.5, out: { id: 'floor_wood', n: 4 }, in: [{ id: 'wood', n: 8 }] },
+  { station: 'hands', lvl: 1, xp: 2,  time: 0.6, out: { id: 'wall_wood', n: 2 },  in: [{ id: 'wood', n: 12 }] },
+
+  // ---- campfire -------------------------------------------------------
+  { station: 'campfire', lvl: 1, xp: 3, time: 3.0, out: { id: 'cooked_meat', n: 1 }, in: [{ id: 'raw_meat', n: 1 }, { id: 'wood', n: 2 }] },
+  { station: 'campfire', lvl: 1, xp: 3, time: 2.5, out: { id: 'clean_water', n: 1 }, in: [{ id: 'dirty_water', n: 1 }, { id: 'wood', n: 2 }] },
+  { station: 'campfire', lvl: 3, xp: 4, time: 2.0, out: { id: 'coal', n: 2 },        in: [{ id: 'wood', n: 10 }] },
+  { station: 'campfire', lvl: 4, xp: 6, time: 3.0, out: { id: 'antidote', n: 1 },    in: [{ id: 'mushroom', n: 3 }, { id: 'clean_water', n: 1 }] },
+
+  // ---- workbench ------------------------------------------------------
+  { station: 'workbench', lvl: 2, xp: 5,  time: 1.5, out: { id: 'nails', n: 8 },        in: [{ id: 'scrap', n: 4 }] },
+  { station: 'workbench', lvl: 3, xp: 8,  time: 2.0, out: { id: 'bat', n: 1 },          in: [{ id: 'wood', n: 18 }, { id: 'nails', n: 12 }] },
+  { station: 'workbench', lvl: 3, xp: 7,  time: 2.0, out: { id: 'crowbar', n: 1 },      in: [{ id: 'scrap', n: 14 }, { id: 'iron_bar', n: 2 }] },
+  { station: 'workbench', lvl: 4, xp: 10, time: 2.5, out: { id: 'axe_iron', n: 1 },     in: [{ id: 'wood', n: 14 }, { id: 'iron_bar', n: 6 }] },
+  { station: 'workbench', lvl: 4, xp: 10, time: 2.5, out: { id: 'pick_iron', n: 1 },    in: [{ id: 'wood', n: 14 }, { id: 'iron_bar', n: 7 }] },
+  { station: 'workbench', lvl: 5, xp: 14, time: 3.0, out: { id: 'machete', n: 1 },      in: [{ id: 'iron_bar', n: 9 }, { id: 'leather', n: 4 }] },
+  { station: 'workbench', lvl: 3, xp: 6,  time: 1.8, out: { id: 'jacket_cloth', n: 1 }, in: [{ id: 'cloth', n: 12 }, { id: 'fiber', n: 8 }] },
+  { station: 'workbench', lvl: 4, xp: 9,  time: 2.2, out: { id: 'jacket_leather', n: 1 },in: [{ id: 'leather', n: 14 }, { id: 'rope', n: 3 }] },
+  { station: 'workbench', lvl: 4, xp: 7,  time: 2.0, out: { id: 'helmet_scrap', n: 1 }, in: [{ id: 'scrap', n: 12 }, { id: 'cloth', n: 4 }] },
+  { station: 'workbench', lvl: 3, xp: 6,  time: 1.8, out: { id: 'boots_leather', n: 1 },in: [{ id: 'leather', n: 8 }, { id: 'rope', n: 2 }] },
+  { station: 'workbench', lvl: 4, xp: 8,  time: 2.0, out: { id: 'bag_med', n: 1 },      in: [{ id: 'leather', n: 12 }, { id: 'rope', n: 4 }] },
+  { station: 'workbench', lvl: 6, xp: 16, time: 3.0, out: { id: 'bag_large', n: 1 },    in: [{ id: 'leather', n: 22 }, { id: 'rope', n: 8 }, { id: 'iron_bar', n: 4 }] },
+  { station: 'workbench', lvl: 2, xp: 4,  time: 1.2, out: { id: 'box_storage', n: 1 },  in: [{ id: 'wood', n: 24 }, { id: 'nails', n: 8 }] },
+  { station: 'workbench', lvl: 2, xp: 4,  time: 1.2, out: { id: 'door_wood', n: 1 },    in: [{ id: 'wood', n: 18 }, { id: 'nails', n: 6 }] },
+  { station: 'workbench', lvl: 3, xp: 5,  time: 1.5, out: { id: 'garden_bed', n: 1 },   in: [{ id: 'wood', n: 20 }, { id: 'fiber', n: 12 }] },
+  { station: 'workbench', lvl: 5, xp: 12, time: 2.5, out: { id: 'furnace', n: 1 },      in: [{ id: 'stone', n: 40 }, { id: 'scrap', n: 16 }, { id: 'coal', n: 6 }] },
+  { station: 'workbench', lvl: 6, xp: 20, time: 4.0, out: { id: 'ammo_9mm', n: 12 },    in: [{ id: 'gunpowder', n: 4 }, { id: 'scrap', n: 6 }] },
+  { station: 'workbench', lvl: 8, xp: 30, time: 5.0, out: { id: 'ammo_rifle', n: 8 },   in: [{ id: 'gunpowder', n: 6 }, { id: 'iron_bar', n: 3 }] },
+
+  // ---- furnace --------------------------------------------------------
+  { station: 'furnace', lvl: 5, xp: 6,  time: 3.0, out: { id: 'iron_bar', n: 1 }, in: [{ id: 'iron_ore', n: 2 }, { id: 'coal', n: 1 }] },
+  { station: 'furnace', lvl: 6, xp: 10, time: 3.5, out: { id: 'wall_stone', n: 1 }, in: [{ id: 'stone', n: 30 }, { id: 'iron_bar', n: 1 }] },
+];
+
+export const XP_PER_LEVEL = (lvl) => Math.round(45 * Math.pow(lvl, 1.45));
+
+export function levelFromXp(xp) {
+  let lvl = 1;
+  let spent = 0;
+  while (spent + XP_PER_LEVEL(lvl) <= xp) { spent += XP_PER_LEVEL(lvl); lvl++; }
+  return { lvl, into: xp - spent, need: XP_PER_LEVEL(lvl) };
+}

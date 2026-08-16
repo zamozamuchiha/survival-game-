@@ -1,0 +1,24 @@
+# Downloaded asset archives and their unpacked contents.
+#
+# These are working directories, not sources: assets/_zips holds the Kenney
+# packs as downloaded (re-fetchable with assets/_zips/fetch.sh) and assets/raw
+# is what was unpacked from them. Only assets/models is needed to run the game.
+# Keeping them out drops the repository from 118 MB to about 24 MB.
+assets/_zips/
+assets/raw/
+
+# Per-machine editor and tool settings — paths and permissions differ per person.
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Node, in case tooling gets added later
+node_modules/
+npm-debug.log*

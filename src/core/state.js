@@ -22,6 +22,9 @@ export const state = {
   locationId: 'home',
   timeLeft: 0,
 
+  // { active, done: [ids], progress: { goalIndex: count } } — see core/missions.js
+  missions: null,
+
   base: {},        // "x,z" -> { item, build, hp, station?, contents? }
   graves: {},      // locationId -> [{ id, n, dur }]
   seenLocations: ['home', 'pine'],

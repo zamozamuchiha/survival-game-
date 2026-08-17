@@ -70,11 +70,18 @@ export const ITEMS = {
   bag_med:   { name: 'Backpack',      icon: '🎒', cat: 'armor', stack: 1, weight: 1.2, slot: 'back', slots: 24, carry: 68 },
   bag_large: { name: 'Trekking Pack', icon: '🎒', cat: 'armor', stack: 1, weight: 2.0, slot: 'back', slots: 32, carry: 95 },
 
-  // ---- buildables (placed on the home grid) ---------------------------
+  // ---- buildables -----------------------------------------------------
+  // Kept for save compatibility only. Building no longer goes through the bag:
+  // a piece is placed straight from raw materials (see data/building.js), so
+  // there is nothing to carry from the workbench to the spot you want it in.
+  // Anything still held here is converted back to resources on load — see
+  // migrateBase() in main.js.
+  foundation_wood:{ name: 'Timber Foundation',icon: '🪨', cat: 'build', stack: 50, weight: 3.0, build: 'foundation', hp: 260 },
   floor_wood:  { name: 'Wooden Floor',   icon: '🟧', cat: 'build', stack: 50, weight: 1.0, build: 'floor',   hp: 120 },
   wall_wood:   { name: 'Wooden Wall',    icon: '🚧', cat: 'build', stack: 50, weight: 1.5, build: 'wall',    hp: 200 },
   wall_stone:  { name: 'Stone Wall',     icon: '🧱', cat: 'build', stack: 50, weight: 3.0, build: 'wall',    hp: 520 },
   door_wood:   { name: 'Wooden Door',    icon: '🚪', cat: 'build', stack: 10, weight: 2.0, build: 'door',    hp: 160 },
+  roof_wood:   { name: 'Wooden Roof',    icon: '🏠', cat: 'build', stack: 20, weight: 2.0, build: 'roof',    hp: 160 },
   box_storage: { name: 'Storage Box',    icon: '📦', cat: 'build', stack: 10, weight: 4.0, build: 'storage', hp: 100, capacity: 24 },
   campfire:    { name: 'Campfire',       icon: '🔥', cat: 'build', stack: 5,  weight: 3.0, build: 'station', station: 'campfire' },
   workbench:   { name: 'Workbench',      icon: '🛠️', cat: 'build', stack: 5,  weight: 8.0, build: 'station', station: 'workbench' },

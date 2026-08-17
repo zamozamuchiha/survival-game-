@@ -144,6 +144,11 @@ export class ResourceNode {
         stump.visible = false;
         stump.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
         stump.position.copy(position);
+        // Set into the ground rather than stood on it. fitHeight puts the flare's
+        // rim exactly on y=0, and the terrain is not perfectly flat, so anything
+        // shallower leaves the rim hanging over a dip with daylight under it.
+        // A real stump is buried to its root collar anyway.
+        stump.position.y -= 0.16;
         this.stump = stump;
       }
     }

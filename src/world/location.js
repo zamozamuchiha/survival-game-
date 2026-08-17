@@ -4,7 +4,7 @@ import { scatterContainers } from './containers.js';
 import { scatterPickups } from './pickups.js';
 import { getModel, getParts, pickVariant, fitHeight } from './models.js';
 import { InstanceBatch, instanceOf } from './instancing.js';
-import { PLOT_HALF } from './base.js';
+import { CAMP_CLEAR_HALF } from './base.js';
 import { surfaceMaterial } from './textures.js';
 import { GrassField } from './grass.js';
 import { Zombie } from '../entities/zombie.js';
@@ -348,10 +348,10 @@ export function buildLocation(def, rng) {
   sun.shadow.normalBias = 0.022;
   scene.add(sun, sun.target);
 
-  // Home has a buildable plot; everywhere else just keeps the arrival spot clear.
-  // Scenery has to stay off the plot entirely, otherwise you spawn in owning a
-  // patch of ground with a boulder parked in the middle of it.
-  const plotHalf = def.id === 'home' ? PLOT_HALF : 0;
+  // Home is generated with an apron of clear ground to start building on;
+  // everywhere else just keeps the arrival spot clear. The buildable plot reaches
+  // well past this — expanding out to it means felling what stands in the way.
+  const plotHalf = def.id === 'home' ? CAMP_CLEAR_HALF : 0;
   const clear = plotHalf > 0 ? Math.hypot(plotHalf, plotHalf) + 1 : 5;
 
   scene.add(buildTerrain(rng, biome, radius, plotHalf));

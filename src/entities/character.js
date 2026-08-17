@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getModel, getAnimations, fitHeight, facingOffset } from '../world/models.js';
+import { getModel, getAnimations, fitHeight, facingOffset, uprightSkeleton } from '../world/models.js';
 import {
   findBones, cacheRest, buildSwingClip, buildPunchClip, buildToolSwingClip,
   buildShamblePose, buildDeathClip,
@@ -70,8 +70,25 @@ export class CharacterRig {
     this.deathAction.setLoop(THREE.LoopOnce, 1);
     this.deathAction.clampWhenFinished = true;
 
+    /** True when the model had to be turned to stand up; see uprightSkeleton. */
+    this.flipped = false;
+
     this.base = null;
     this.dead = false;
+
+    // Judge the orientation with a clip actually driving the bones. setBase
+    // fades in, so on the first frame the clip carries no weight and the check
+    // would read the rest pose instead — which always looks upright.
+    const probe = this.loco.idle ?? this.loco.walk ?? this.loco.run;
+    if (probe) {
+      probe.reset();
+      probe.setEffectiveWeight(1);
+      probe.play();
+      this.mixer.update(0.016);
+      uprightSkeleton(this.model);
+      this.flipped = !!this.model.userData.uprightFlipped;
+      probe.stop();
+    }
     this.setBase('idle');
   }
 

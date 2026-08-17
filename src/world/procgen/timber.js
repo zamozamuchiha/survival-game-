@@ -20,7 +20,7 @@ const NAIL_COLOUR = 0x4a4640;
  * moves a couple of millimetres, so edges are very slightly out of true and
  * catch the light unevenly along their length.
  */
-function plankGeometry(rng, length, width, thickness, opts = {}) {
+export function plankGeometry(rng, length, width, thickness, opts = {}) {
   const segments = opts.segments ?? 3;
   const geo = new THREE.BoxGeometry(length, thickness, width, segments, 1, 1);
 
@@ -38,34 +38,136 @@ function plankGeometry(rng, length, width, thickness, opts = {}) {
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   geo.computeVertexNormals();
+  // Every board is modelled around its own origin, so without a random offset
+  // they would all show the identical patch of grain and a wall would come out
+  // looking woven. The offset is what makes each board a different board.
+  //
+  // The grain also runs at a slightly different scale on each board, because two
+  // planks off different logs never have the same ring spacing.
+  const tile = (opts.tile ?? GRAIN_TILE) * rng.range(0.82, 1.24);
+  worldUV(geo, tile, rng() * 9, rng() * 9, width);
+  return markEndGrain(geo);
+}
+
+/**
+ * Flags the two sawn ends of a board.
+ *
+ * A board is laid out with its length on X, so the ±X faces are the cut ends —
+ * the only faces that should show growth rings rather than long fibres. Marked
+ * per vertex here, while the board is still axis-aligned, because callers rotate
+ * it immediately afterwards and the information would be lost.
+ */
+function markEndGrain(geo) {
+  const nor = geo.attributes.normal;
+  const flag = new Float32Array(nor.count);
+  for (let i = 0; i < nor.count; i++) {
+    const nx = Math.abs(nor.getX(i));
+    const ny = Math.abs(nor.getY(i));
+    const nz = Math.abs(nor.getZ(i));
+    flag[i] = nx >= ny && nx >= nz ? 1 : 0;
+  }
+  geo.setAttribute('endGrain', new THREE.BufferAttribute(flag, 1));
   return geo;
 }
 
 /**
- * Swaps U and V.
+ * Splits a geometry into its face-grain and end-grain halves.
  *
- * The timber texture runs its fibres along U, which is right for a board lying
- * flat but wrong once the same board is stood on end — the grain then bands
- * across the plank instead of running up it, which is the single thing that most
- * makes sawn wood look like printed paper.
+ * They need different textures, and a shader that blends two full PBR sets per
+ * pixel costs more than simply drawing the ends as their own small mesh.
  */
-function swapUV(geo) {
+function splitEndGrain(geo) {
+  if (!geo.getAttribute('endGrain')) return { face: geo, end: null };
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  const flag = g.getAttribute('endGrain');
+  const names = Object.keys(g.attributes).filter((n) => n !== 'endGrain');
+  const tris = flag.count / 3;
+
+  const build = (want) => {
+    const picked = [];
+    for (let t = 0; t < tris; t++) {
+      if ((flag.getX(t * 3) > 0.5 ? 1 : 0) === want) picked.push(t);
+    }
+    if (!picked.length) return null;
+    const out = new THREE.BufferGeometry();
+    for (const name of names) {
+      const src = g.attributes[name];
+      const n = src.itemSize;
+      const arr = new Float32Array(picked.length * 3 * n);
+      let o = 0;
+      for (const t of picked) {
+        for (let k = 0; k < 3; k++) {
+          for (let c = 0; c < n; c++) arr[o++] = src.array[(t * 3 + k) * n + c];
+        }
+      }
+      out.setAttribute(name, new THREE.BufferAttribute(arr, n));
+    }
+    return out;
+  };
+
+  return { face: build(0), end: build(1) };
+}
+
+/** Metres of timber per texture repeat — about one knot per board. */
+const GRAIN_TILE = 1.9;
+
+/**
+ * Replaces a box's UVs with ones measured in metres.
+ *
+ * A BoxGeometry gives every face the same 0..1 square whatever its real size, so
+ * one repeat of the grain covers 2.4m up a wall board and 0.2m across it — a
+ * twelvefold stretch that turns sawn timber into dark vertical streaking. Laying
+ * the UVs out in world units instead means the grain is the same size on every
+ * board in the game, however long or wide it is.
+ *
+ * U always follows the board's own length, so once a plank is stood on end the
+ * fibres run up it rather than banding across it.
+ */
+export function worldUV(geo, tile = GRAIN_TILE, offU = 0, offV = 0, width = 0) {
+  const pos = geo.attributes.position;
+  const nor = geo.attributes.normal;
   const uv = geo.attributes.uv;
-  for (let i = 0; i < uv.count; i++) {
-    const u = uv.getX(i);
-    uv.setXY(i, uv.getY(i), u);
+  if (!uv) return geo;
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const nx = Math.abs(nor.getX(i));
+    const ny = Math.abs(nor.getY(i));
+    const nz = Math.abs(nor.getZ(i));
+
+    // Project onto whichever plane the face is closest to lying in.
+    let u, v;
+    if (nx >= ny && nx >= nz) {
+      // A sawn end. Its texture is a set of growth rings centred on the pith, so
+      // it is mapped across the board's own cross-section rather than tiled in
+      // world units — one board end, one set of rings. Both axes are divided by
+      // the width so the rings stay round: dividing v by the thickness instead
+      // would smear them into stripes on anything thinner than it is wide.
+      const w = width > 1e-6 ? width : tile;
+      u = z / w + 0.5;
+      v = y / w + 0.5;
+      uv.setXY(i, u, v);
+      continue;
+    }
+    if (ny >= nz) { u = x; v = z; }                    // face up or down
+    else { u = x; v = y; }                             // face front or back
+    uv.setXY(i, u / tile + offU, v / tile + offV);
   }
   uv.needsUpdate = true;
   return geo;
 }
 
 /** Tints a geometry per board so a wall isn't one flat colour. */
-function tint(geo, rng, base = 1) {
+export function tint(geo, rng, base = 1) {
   const count = geo.attributes.position.count;
   const colors = new Float32Array(count * 3);
-  // Boards come from different trees and weather differently.
-  const k = base * rng.range(0.82, 1.14);
-  const warm = rng.range(-0.05, 0.07);
+  // Boards come from different trees and weather differently. A wide spread on
+  // purpose: a stack of planks cut on the same day still ranges from straw to
+  // dark honey, and matching them all is what makes timber look manufactured.
+  const k = base * rng.range(0.72, 1.22);
+  const warm = rng.range(-0.09, 0.11);
   for (let i = 0; i < count; i++) {
     colors[i * 3] = k * (1 + warm);
     colors[i * 3 + 1] = k;
@@ -76,7 +178,7 @@ function tint(geo, rng, base = 1) {
 }
 
 /** A nail head: a small flattened cylinder, slightly proud of the wood. */
-function nailGeometry(rng) {
+export function nailGeometry(rng) {
   const r = rng.range(0.008, 0.012);
   const geo = new THREE.CylinderGeometry(r, r * 0.85, 0.006, 6);
   geo.rotateX(Math.PI / 2);
@@ -85,28 +187,57 @@ function nailGeometry(rng) {
 
 const sharedMats = new Map();
 
-function timberMaterials() {
+export function timberMaterials() {
   if (sharedMats.has('timber')) return sharedMats.get('timber');
+  // repeat 1: plankGeometry lays its UVs out in metres, so the tiling is
+  // already set by the geometry rather than by the material.
+  //
+  // A big map, because the whole point is that it survives being walked up to:
+  // at 1024 across roughly two metres of board a growth ring is several pixels
+  // wide instead of one, which is the difference between grain and noise.
   const wood = surfaceMaterial('timber', {
-    repeat: 1.6, roughness: 0.92, seed: 6, normalScale: 1.1,
+    repeat: 1, roughness: 1, seed: 6, normalScale: 0.75, size: 1024,
   });
   wood.vertexColors = true;
+
+  // The sawn ends: rings, rays and drying checks, mapped per board end.
+  const end = surfaceMaterial('timberEnd', {
+    repeat: 1, roughness: 1, seed: 6, normalScale: 1.0, size: 512,
+  });
+  end.vertexColors = true;
+
   const metal = new THREE.MeshStandardMaterial({
     color: NAIL_COLOUR, roughness: 0.55, metalness: 0.8,
   });
-  const set = { wood, metal };
+  const set = { wood, end, metal };
   sharedMats.set('timber', set);
   return set;
 }
 
-function assemble(woodParts, nailParts) {
+export function assemble(woodParts, nailParts, extra = []) {
   const mats = timberMaterials();
   const group = new THREE.Group();
 
-  const wood = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(woodParts, false), mats.wood);
-  wood.castShadow = true;
-  wood.receiveShadow = true;
-  group.add(wood);
+  if (woodParts.length) {
+    // Faces and ends are drawn separately so each can carry the texture that
+    // belongs to it: long fibres down the board, growth rings across the cut.
+    const faces = [];
+    const ends = [];
+    for (const part of woodParts) {
+      const split = splitEndGrain(part);
+      if (split.face) faces.push(split.face);
+      if (split.end) ends.push(split.end);
+    }
+
+    for (const [parts, material] of [[faces, mats.wood], [ends, mats.end]]) {
+      if (!parts.length) continue;
+      const mesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(parts, false), material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+  }
+  for (const o of extra) group.add(o);
 
   if (nailParts.length) {
     const nails = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(nailParts, false), mats.metal);
@@ -125,7 +256,7 @@ function assemble(woodParts, nailParts) {
  * a hut stops most of a metre short of the wall and the two read as separate
  * objects sitting near each other.
  */
-function deckInto(wood, nails, rng, spanX, spanZ, boardT, joistH) {
+function deckInto(wood, nails, rng, spanX, spanZ, boardT, joistH, tight = false) {
   const joistCount = Math.max(2, Math.round(spanZ / 0.7));
   for (let i = 0; i < joistCount; i++) {
     const z = -spanZ / 2 + (i + 0.5) * (spanZ / joistCount);
@@ -147,13 +278,19 @@ function deckInto(wood, nails, rng, spanX, spanZ, boardT, joistH) {
   // Boards across the joists.
   let z = -spanZ / 2;
   const y = joistH + boardT / 2;
+  // Floor tiles butt up against their neighbours, so in tight mode the boards run
+  // the full span and the seams close: anything less and every cell boundary
+  // shows a centimetre of daylight straight through the deck.
+  const seam = tight ? 0.0015 : 0.0055;
   while (z < spanZ / 2 - 0.02) {
     const w = Math.min(rng.range(0.13, 0.21), spanZ / 2 - z);
-    if (w < 0.04) break;
+    if (w < (tight ? 0.02 : 0.04)) break;
     const centre = z + w / 2;
-    const geo = plankGeometry(rng, spanX * rng.range(0.985, 1.0), w, boardT * rng.range(0.9, 1.1), { bow: 0.004 });
-    geo.rotateY(rng.range(-0.006, 0.006));
-    geo.translate(rng.range(-0.006, 0.006), y, centre);
+    const len = tight ? spanX : spanX * rng.range(0.985, 1.0);
+    const jitter = tight ? 0 : 0.006;
+    const geo = plankGeometry(rng, len, w, boardT * rng.range(0.9, 1.1), { bow: 0.004 });
+    geo.rotateY(rng.range(-jitter, jitter));
+    geo.translate(rng.range(-jitter, jitter), y, centre);
     wood.push(tint(geo, rng));
 
     for (let i = 0; i < joistCount; i++) {
@@ -164,7 +301,7 @@ function deckInto(wood, nails, rng, spanX, spanZ, boardT, joistH) {
       n.translate(jz + rng.range(-0.02, 0.02), y + boardT * 0.5, centre + rng.range(-0.015, 0.015));
       nails.push(n);
     }
-    z += w + rng.range(0.003, 0.008);       // the gap between deck boards
+    z += w + seam;                          // the gap between deck boards
   }
   return joistH + boardT;
 }
@@ -178,8 +315,8 @@ function deckInto(wood, nails, rng, spanX, spanZ, boardT, joistH) {
  */
 export function makePlankWall(rng, opts = {}) {
   const width = opts.width ?? 2.0;
-  const height = opts.height ?? 2.1;
-  const thickness = opts.thickness ?? 0.05;
+  const height = opts.height ?? 2.4;
+  const thickness = opts.thickness ?? 0.06;
 
   const wood = [];
   const nails = [];
@@ -214,7 +351,7 @@ export function makePlankWall(rng, opts = {}) {
     // Set into the decking rather than resting on top of it, the way a stud sits
     // into a sole plate.
     geo.translate(b.x, Math.max(0, sill - 0.02) + h / 2, rng.range(-0.006, 0.006));
-    wood.push(tint(swapUV(geo), rng));
+    wood.push(tint(geo, rng));
 
     // Two nails per crossing, offset from centre like a real fixing.
     for (const y of braceY) {
@@ -245,7 +382,35 @@ export function makePlankWall(rng, opts = {}) {
     wood.push(tint(geo, rng, 0.88));
   }
 
+  if (opts.posts !== false) pushEndPosts(wood, nails, rng, width, height, thickness, sill);
+
   return assemble(wood, nails);
+}
+
+/**
+ * Squared corner posts at both ends of a wall.
+ *
+ * Walls stand on the boundary between two cells, so at a corner two of them meet
+ * end-on and their boards would otherwise interpenetrate in a mess of edges. A
+ * post is what a real frame puts there, and it swallows the joint: whichever wall
+ * you look at, the corner reads as one upright timber.
+ */
+function pushEndPosts(wood, nails, rng, width, height, thickness, sill) {
+  const side = 0.115;
+  for (const dir of [-1, 1]) {
+    const h = height * rng.range(1.0, 1.03);          // posts run a touch proud
+    const geo = plankGeometry(rng, h, side, side, { bow: 0.004 });
+    geo.rotateZ(Math.PI / 2);
+    geo.rotateY(rng.range(-0.008, 0.008));
+    geo.translate(dir * (width / 2 - side * 0.42), Math.max(0, sill - 0.02) + h / 2, 0);
+    wood.push(tint(geo, rng, 0.94));
+
+    for (const y of [sill + height * 0.2, sill + height * 0.55, sill + height * 0.86]) {
+      const n = nailGeometry(rng);
+      n.translate(dir * (width / 2 - side * 0.42), y, side * 0.52);
+      nails.push(n);
+    }
+  }
 }
 
 /**
@@ -254,21 +419,80 @@ export function makePlankWall(rng, opts = {}) {
  */
 export function makePlankFloor(rng, opts = {}) {
   const size = opts.size ?? 2.0;
-  const boardT = opts.boardThickness ?? 0.035;
-  const joistH = opts.joistHeight ?? 0.085;
+  const boardT = opts.boardThickness ?? 0.05;
+  const joistH = opts.joistHeight ?? 0.13;
 
   const wood = [];
   const nails = [];
-  deckInto(wood, nails, rng, size, size, boardT, joistH);
+  deckInto(wood, nails, rng, size, size, boardT, joistH, opts.tight ?? true);
+  return assemble(wood, nails);
+}
+
+/** Raised bearer frame with rough stone pads. It makes a floor read as a real
+ * construction rather than boards floating directly over grass. */
+export function makeTimberFoundation(rng, opts = {}) {
+  const size = opts.size ?? 2;
+  const wood = [];
+  const nails = [];
+  const stoneMat = new THREE.MeshStandardMaterial({ color: 0x6a655d, roughness: 0.96, flatShading: true });
+  const pads = new THREE.Group();
+  for (const x of [-size * 0.38, size * 0.38]) for (const z of [-size * 0.38, size * 0.38]) {
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(rng.range(0.17, 0.22), 1), stoneMat);
+    rock.scale.y = rng.range(0.45, 0.65);
+    rock.position.set(x, 0.07, z);
+    pads.add(rock);
+  }
+  for (const z of [-size * 0.32, size * 0.32]) {
+    const beam = plankGeometry(rng, size * 0.92, 0.15, 0.16, { bow: 0.004 });
+    beam.translate(0, 0.20, z);
+    wood.push(tint(beam, rng, 0.78));
+  }
+  for (const x of [-size * 0.42, size * 0.42]) {
+    const beam = plankGeometry(rng, size * 0.86, 0.12, 0.13, { bow: 0.003 });
+    beam.rotateY(Math.PI / 2);
+    beam.translate(x, 0.26, 0);
+    wood.push(tint(beam, rng, 0.82));
+  }
+  return assemble(wood, nails, [pads]);
+}
+
+/** A compact pitched roof tile. Each tile is a framed, boarded roof section so
+ * neighbouring cells expand into one continuous roof rather than a prefab hut. */
+export function makeTimberRoof(rng, opts = {}) {
+  const size = opts.size ?? 2;
+  const rise = opts.rise ?? 0.68;
+  const wood = [];
+  const nails = [];
+  for (const side of [-1, 1]) {
+    const angle = Math.atan2(rise, size / 2);
+    const slope = Math.hypot(size / 2, rise);
+    for (let i = 0; i < 7; i++) {
+      const z = -size / 2 + (i + 0.5) * (size / 7);
+      const board = plankGeometry(rng, slope * 1.08, 0.12, 0.035, { bow: 0.003 });
+      board.rotateZ(side * angle);
+      board.translate(side * size * 0.25, 0.15 + rise * 0.5, z);
+      wood.push(tint(board, rng, 0.88));
+    }
+    for (const z of [-size * 0.36, size * 0.36]) {
+      const rafter = plankGeometry(rng, slope * 1.05, 0.10, 0.08, { bow: 0.002 });
+      rafter.rotateZ(side * angle);
+      rafter.translate(side * size * 0.25, 0.11 + rise * 0.5, z);
+      wood.push(tint(rafter, rng, 0.75));
+    }
+  }
+  const ridge = plankGeometry(rng, size * 1.04, 0.14, 0.07, { bow: 0.002 });
+  ridge.rotateY(Math.PI / 2);
+  ridge.translate(0, rise + 0.18, 0);
+  wood.push(tint(ridge, rng, 0.82));
   return assemble(wood, nails);
 }
 
 /** A doorway: the same plank wall with an opening and a framed head. */
 export function makePlankDoor(rng, opts = {}) {
   const width = opts.width ?? 2.0;
-  const height = opts.height ?? 2.1;
-  const thickness = opts.thickness ?? 0.05;
-  const openW = width * 0.46;
+  const height = opts.height ?? 2.4;
+  const thickness = opts.thickness ?? 0.06;
+  const openW = opts.openWidth ?? 1.0;
 
   const wood = [];
   const nails = [];
@@ -289,7 +513,7 @@ export function makePlankDoor(rng, opts = {}) {
       geo.rotateZ(Math.PI / 2);
       geo.rotateY(rng.range(-0.012, 0.012));
       geo.translate(cx, Math.max(0, sill - 0.02) + h / 2, rng.range(-0.006, 0.006));
-      wood.push(tint(swapUV(geo), rng));
+      wood.push(tint(geo, rng));
 
       const n = nailGeometry(rng);
       n.translate(cx, sill + height * 0.72, thickness * 0.52);
@@ -315,5 +539,83 @@ export function makePlankDoor(rng, opts = {}) {
     nails.push(n);
   }
 
-  return assemble(wood, nails);
+  pushEndPosts(wood, nails, rng, width, height, thickness, sill);
+
+  // The leaf hangs in its own group so the base can swing it open. Its geometry
+  // runs from the hinge outwards, which puts the pivot on the group's origin —
+  // rotate the group and the door turns on its hinges instead of about its middle.
+  const leaf = makeDoorLeaf(rng, openW - 0.03, Math.min(height * 0.86, sill + height * 0.86) - sill);
+  leaf.position.set(-openW / 2 + 0.015, sill, 0);
+
+  // Named, not stashed in userData: getModel hands out clones, and cloning
+  // round-trips userData through JSON — an object reference in there comes back
+  // as a lifeless copy of its own fields.
+  leaf.name = 'door_leaf';
+  return assemble(wood, nails, [leaf]);
+}
+
+/**
+ * A ledged and braced door: vertical boards held by three ledges and a diagonal,
+ * hung on two iron straps.
+ *
+ * Built from x = 0 (the hinge stile) outwards so the group's origin is the pivot.
+ */
+function makeDoorLeaf(rng, leafW, leafH) {
+  const wood = [];
+  const nails = [];
+  const t = 0.045;
+
+  const ledgeY = [leafH * 0.14, leafH * 0.52, leafH * 0.88];
+
+  let x = 0;
+  while (x < leafW - 0.02) {
+    const w = Math.min(rng.range(0.14, 0.2), leafW - x);
+    if (w < 0.05) break;
+    const geo = plankGeometry(rng, leafH, w, t * rng.range(0.9, 1.1), { bow: 0.005 });
+    geo.rotateZ(Math.PI / 2);
+    geo.rotateY(Math.PI / 2);
+    geo.translate(x + w / 2, leafH / 2, 0);
+    wood.push(tint(geo, rng, 1.04));       // a newer board than the wall
+
+    for (const y of ledgeY) {
+      const n = nailGeometry(rng);
+      n.translate(x + w / 2, y + rng.range(-0.01, 0.01), t * 0.6);
+      nails.push(n);
+    }
+    x += w - rng.range(0.001, 0.004);
+  }
+
+  for (const y of ledgeY) {
+    const geo = plankGeometry(rng, leafW * 0.96, 0.11, 0.035, { bow: 0.003 });
+    geo.rotateX(Math.PI / 2);
+    geo.translate(leafW / 2, y, -t * 0.8);
+    wood.push(tint(geo, rng, 0.9));
+  }
+
+  const rise = ledgeY[2] - ledgeY[0];
+  const diag = plankGeometry(rng, Math.hypot(leafW * 0.92, rise), 0.09, 0.03);
+  diag.rotateX(Math.PI / 2);
+  diag.rotateZ(Math.atan2(rise, leafW * 0.92));
+  diag.translate(leafW / 2, (ledgeY[0] + ledgeY[2]) / 2, -t * 0.8);
+  wood.push(tint(diag, rng, 0.86));
+
+  const iron = [];
+  for (const y of [ledgeY[0], ledgeY[2]]) {
+    const strap = new THREE.BoxGeometry(leafW * 0.55, 0.055, 0.012);
+    strap.translate(leafW * 0.3, y, t * 0.72);
+    iron.push(strap);
+    const pin = new THREE.CylinderGeometry(0.022, 0.022, 0.09, 6);
+    pin.translate(0.01, y, t * 0.4);
+    iron.push(pin);
+  }
+  const handle = new THREE.TorusGeometry(0.055, 0.011, 5, 10);
+  handle.rotateX(Math.PI / 2);
+  handle.translate(leafW * 0.86, leafH * 0.46, t * 0.7);
+  iron.push(handle);
+
+  const mats = timberMaterials();
+  const ironMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(iron, false), mats.metal);
+  ironMesh.castShadow = true;
+
+  return assemble(wood, nails, [ironMesh]);
 }

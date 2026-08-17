@@ -52,6 +52,23 @@
   .durbar.low > i { background: #e2a04a; }
   .durbar.crit > i { background: #e2624a; }
 
+  /* Objective tracker: sits under the region header, top right. Deliberately
+     quiet — it should be readable at a glance and ignorable the rest of the time. */
+  #mission { position: absolute; top: 96px; right: 18px; width: 210px; text-align: right;
+    font-size: 11px; letter-spacing: .04em; pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,.85); transition: opacity .3s; }
+  #mission.hide { opacity: 0; }
+  #mission .mtitle { display: flex; gap: 7px; justify-content: flex-end; align-items: baseline; margin-bottom: 5px; }
+  #mission .mtag { font-size: 8.5px; opacity: .45; letter-spacing: .18em; }
+  #mission b { font-weight: 600; font-size: 12px; }
+  #mission .goal { display: flex; gap: 8px; justify-content: flex-end; align-items: baseline;
+    opacity: .78; line-height: 1.65; }
+  #mission .goal.done { opacity: .4; }
+  #mission .goal.done span { text-decoration: line-through; }
+  #mission .goal i { font-style: normal; opacity: .6; font-variant-numeric: tabular-nums; font-size: 10px; }
+  #mission .mhint { margin-top: 6px; font-size: 10px; opacity: .42; line-height: 1.5; }
+  #mission .mhint kbd { font-size: 9px; }
+
   #prompt { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); text-align: center;
             background: rgba(0,0,0,.7); border: 1px solid rgba(255,255,255,.22); border-radius: 3px;
             padding: 8px 14px; font-size: 12px; opacity: 0; transition: opacity .12s; white-space: nowrap; }
@@ -147,16 +164,49 @@
   .loc .cost { font-size: 10.5px; margin-bottom: 9px; }
   .loc .grave { font-size: 10px; color: #d2a545; margin-bottom: 8px; }
 
-  /* build bar */
-  #buildbar { position: absolute; bottom: 74px; left: 50%; transform: translateX(-50%);
-              display: none; gap: 6px; background: rgba(0,0,0,.72); padding: 8px;
-              border: 1px solid rgba(255,255,255,.16); border-radius: 3px; pointer-events: auto; }
-  #buildbar.on { display: flex; }
-  .bslot { width: 52px; height: 52px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.14);
-           border-radius: 2px; cursor: pointer; display: flex; flex-direction: column; align-items: center;
-           justify-content: center; font-size: 19px; position: relative; }
-  .bslot.on { border-color: #d2a545; background: rgba(210,165,69,.16); }
-  .bslot .n { position: absolute; right: 3px; bottom: 2px; font-size: 9px; font-weight: 700; }
+  /* build mode: the strip along the bottom while you're placing */
+  #buildhint { position: absolute; bottom: 74px; left: 50%; transform: translateX(-50%);
+               display: none; align-items: center; gap: 22px; background: rgba(0,0,0,.74);
+               padding: 9px 16px; border: 1px solid rgba(255,255,255,.16); border-radius: 3px;
+               pointer-events: none; white-space: nowrap; }
+  #buildhint.on { display: flex; }
+  .bh-pick { font-size: 13px; letter-spacing: .04em; }
+  .bh-pick i { font-style: normal; opacity: .6; font-size: 11px; margin-left: 6px; }
+  .bh-keys { font-size: 9.5px; letter-spacing: .1em; opacity: .5; }
+  .bh-keys b { color: #d2a545; font-weight: 700; }
+  #buildwhy { position: absolute; bottom: 128px; left: 50%; transform: translateX(-50%);
+              display: none; font-size: 11px; letter-spacing: .06em; color: #e2624a;
+              background: rgba(0,0,0,.6); padding: 5px 12px; border-radius: 2px; }
+  #buildwhy.on { display: block; }
+
+  /* build menu */
+  #buildmenu { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+               background: rgba(6,8,7,.78); z-index: 7; }
+  #buildmenu.on { display: flex; }
+  .bmbox { width: min(680px, 92vw); max-height: 78vh; background: #12160f;
+           border: 1px solid rgba(255,255,255,.14); border-radius: 3px; display: flex; flex-direction: column; }
+  .bmhead { display: flex; align-items: center; gap: 16px; padding: 14px 18px;
+            border-bottom: 1px solid rgba(255,255,255,.1); }
+  .bmhead h3 { font-size: 13px; letter-spacing: .3em; font-weight: 600; }
+  #bm-tabs { display: flex; gap: 4px; margin-left: auto; }
+  .bm-tab { font-size: 10px; letter-spacing: .16em; padding: 6px 12px; cursor: pointer;
+            border: 1px solid rgba(255,255,255,.12); border-radius: 2px; opacity: .55; }
+  .bm-tab.on { opacity: 1; border-color: #d2a545; color: #d2a545; }
+  #bm-close { font-size: 16px; opacity: .5; cursor: pointer; padding: 0 4px; }
+  #bm-list { overflow-y: auto; padding: 12px; display: grid; gap: 8px;
+             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .bm-card { display: flex; gap: 12px; padding: 11px 13px; cursor: pointer;
+             background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.1); border-radius: 2px; }
+  .bm-card:hover { border-color: #d2a545; background: rgba(210,165,69,.1); }
+  .bm-card.poor { opacity: .62; }
+  .bm-card.locked { opacity: .38; pointer-events: none; }
+  .bm-icon { font-size: 26px; line-height: 1; padding-top: 2px; }
+  .bm-name { font-size: 12.5px; margin-bottom: 3px; }
+  .bm-hint { font-size: 10px; opacity: .55; line-height: 1.5; margin-bottom: 7px; }
+  .bm-costs { display: flex; flex-wrap: wrap; gap: 10px; }
+  .bm-cost { font-size: 10.5px; opacity: .8; }
+  .bm-cost b { font-weight: 700; }
+  .bm-cost.short { color: #e2624a; opacity: 1; }
 
   /* death */
   #dead { position: fixed; inset: 0; background: rgba(24,5,5,.86); display: none; z-index: 8;
@@ -223,6 +273,11 @@
     <div class="energy" id="energy">⚡ 100 / 100</div>
   </div>
 
+  <div id="mission">
+    <div class="mtitle"><span class="mtag">OBJECTIVE</span><b id="mission-title"></b></div>
+    <div id="mission-goals"></div>
+  </div>
+
   <div class="loadout">
     <div class="chip" id="chip-weapon"><b>WEAPON</b><em>Fists</em><div class="durbar" style="display:none"><i></i></div></div>
     <div class="chip" id="chip-weight"><b>LOAD</b><em>0 / 22 kg</em></div>
@@ -238,7 +293,19 @@
   </div>
 
   <div id="toasts"></div>
-  <div id="buildbar"></div>
+  <div id="buildwhy"></div>
+  <div id="buildhint"></div>
+</div>
+
+<div id="buildmenu">
+  <div class="bmbox">
+    <div class="bmhead">
+      <h3>BUILD</h3>
+      <div id="bm-tabs"></div>
+      <div id="bm-close">&times;</div>
+    </div>
+    <div id="bm-list"></div>
+  </div>
 </div>
 
 <div id="panels">

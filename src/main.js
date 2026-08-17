@@ -8,7 +8,12 @@ import { ITEMS } from './data/items.js';
 import { LOCATIONS, locationById, ENERGY_MAX, ENERGY_REGEN_PER_SEC } from './data/locations.js';
 import { rollDrops } from './data/loot.js';
 import { buildLocation, SHADOW_RES, SHADOW_EXTENT } from './world/location.js';
-import { Base, ensureStarterBase, worldToCell, cellToWorld, inGrid, CELL } from './world/base.js';
+import { Base } from './world/base.js';
+import { BuildController } from './core/build.js';
+import {
+  initBuildMenu, open as openBuildMenu, close as closeBuildMenu,
+  isBuildMenuOpen, refreshBuildMenu, refreshBuildHint,
+} from './ui/buildmenu.js';
 import { Player } from './entities/player.js';
 import { Zombie } from './entities/zombie.js';
 import { HarvestController } from './entities/harvest.js';
@@ -20,6 +25,7 @@ import { loadModels, buildGenerated } from './world/models.js';
 import { openCreator } from './ui/creator.js';
 import { initPanels, openPanel, closePanels, isPanelOpen, refreshPanels, currentPanel } from './ui/panels.js';
 import { toast } from './ui/toast.js';
+import { report, reportTravel, onMissionEvent, activeMission } from './core/missions.js';
 
 // Camera sits on a fixed angle; the wheel slides it along that line.
 const CAMERA_DIR = new THREE.Vector3(0, 12.5, 10.5).normalize();
@@ -52,9 +58,7 @@ initInput(renderer.domElement);
 let loc = null;          // { def, scene, sun, nodes, containers, zombies, radius, base, grave }
 let player = null;
 let colliders = [];
-let buildMode = false;
-let buildPick = null;    // item id selected in the build bar
-let buildRot = 0;        // yaw applied to the next piece, in quarter turns
+let builder = null;      // BuildController, made once the home base exists
 let searching = null;    // { target, progress, total }
 let harvester = null;    // HarvestController, built with the player
 const tracers = [];
@@ -126,7 +130,13 @@ function loadLocation(def) {
   harvester.stop();
   resetFx();   // the particle pool belongs to the scene we just replaced
 
-  if (def.id === 'home') loc.base = new Base(loc.scene);
+  if (def.id === 'home') {
+    loc.base = new Base(loc.scene);
+    loc.base.obstructed = obstructedAt;
+    builder = makeBuilder();
+  } else {
+    builder = null;
+  }
   // Grass grows everywhere and only gives way to what's actually been built.
   if (loc.grass) {
     loc.grass.blocked = (x, z) => loc.base?.occupiedAt(x, z) ?? false;
@@ -159,6 +169,7 @@ function travelTo(id, free = false) {
 
   loadLocation(def);
   showDeath(false);
+  reportTravel(id);
   toast(`Arrived at ${def.name}`, 'info');
   save();
 }
@@ -283,6 +294,7 @@ function onHarvestEvent(ev) {
   wearWeapon();
 
   if (ev.type === 'depleted') {
+    report('harvest', ev.node.type, 1);
     state.xp += 5;
     state.stats.harvested = (state.stats.harvested ?? 0) + 1;
   } else {
@@ -311,6 +323,7 @@ function wearWeapon() {
 }
 
 function onZombieKilled(z) {
+  report('kill', z.type, 1);
   state.xp += z.def.xp;
   state.stats.kills++;
   const drops = rollDrops(z.type, rng);
@@ -356,9 +369,7 @@ function nearestInteractable() {
   if (loc.base) {
     const near = loc.base.nearest(player.position);
     if (near) {
-      const label = near.cell.build === 'storage' ? 'Open Box'
-        : near.cell.build === 'station' ? `Use ${near.cell.station}`
-        : 'Tend Garden';
+      const label = near.bp.capacity ? `Open ${near.bp.label}` : `Use ${near.bp.label}`;
       best = { type: 'base', obj: near, label };
     }
   }
@@ -392,6 +403,10 @@ function interactPress(target) {
       if (rem > 0) left.push({ id: d.id, n: rem });
       if (rem < d.n) toast(`${ITEMS[d.id].icon} ${ITEMS[d.id].name} ×${d.n - rem}`);
     }
+    for (const d of target.obj.items) {
+      const kept = d.n - (left.find((l) => l.id === d.id)?.n ?? 0);
+      if (kept > 0) report('collect', d.id, kept);
+    }
     target.obj.items = left;
     refreshPanels();
     if (left.length) { toast('Bag full', 'bad'); return; }
@@ -399,17 +414,12 @@ function interactPress(target) {
     loc.pickups.splice(loc.pickups.indexOf(target.obj), 1);
     state.xp += 1;
   } else if (target.type === 'base') {
-    const cell = target.obj.cell;
-    if (cell.build === 'storage') {
-      if (!cell.contents) cell.contents = makeSlots(ITEMS[cell.item].capacity ?? 12);
+    const { cell, bp } = target.obj;
+    if (bp.capacity) {
+      if (!cell.contents) cell.contents = makeSlots(bp.capacity);
       openPanel('store', { cell });
-    } else if (cell.build === 'station') {
+    } else if (cell.station) {
       openPanel('craft', { station: cell.station });
-    } else if (cell.build === 'garden') {
-      if (removeItem(state.inv, 'seeds', 1)) {
-        give([{ id: 'carrot', n: rng.int(2, 4) }]);
-        state.xp += 3;
-      } else toast('You need seeds', 'bad');
     }
   }
 }
@@ -518,40 +528,20 @@ function respawn() {
 
 // ---------------------------------------------------------------- building
 
+const buildMode = () => !!builder?.active;
+
 function setBuildMode(on) {
-  buildMode = on && loc?.def.id === 'home';
-  loc?.base?.setBuildMode(buildMode);
-  document.getElementById('buildbar').classList.toggle('on', buildMode);
-  if (buildMode) renderBuildBar(); else buildPick = null;
-}
-
-function renderBuildBar() {
-  const bar = document.getElementById('buildbar');
-  const owned = [];
-  for (const s of state.inv) {
-    if (!s || ITEMS[s.id]?.cat !== 'build') continue;
-    const found = owned.find((o) => o.id === s.id);
-    if (found) found.n += s.n;
-    else owned.push({ id: s.id, n: s.n });
+  if (!builder || loc?.def.id !== 'home') { closeBuildMenu(); return; }
+  if (on) {
+    builder.open();
+    // Straight into the menu the first time, so the first thing you see is what
+    // you can build rather than an empty cursor.
+    if (!builder.selected) openBuildMenu();
+  } else {
+    builder.close();
+    closeBuildMenu();
   }
-
-  if (!owned.length) {
-    bar.innerHTML = `<div style="font-size:10px;opacity:.55;padding:14px 18px">No buildables. Craft floors, walls or a workbench first.</div>`;
-    buildPick = null;
-    return;
-  }
-  if (!owned.some((o) => o.id === buildPick)) buildPick = owned[0].id;
-
-  bar.innerHTML = owned.map((o) => `
-    <div class="bslot${o.id === buildPick ? ' on' : ''}" data-b="${o.id}" title="${ITEMS[o.id].name}">
-      ${ITEMS[o.id].icon}<span class="n">${o.n}</span>
-    </div>`).join('') +
-    `<div style="font-size:9px;opacity:.5;align-self:center;padding:0 8px;line-height:1.6">
-      CLICK place<br>RIGHT-CLICK remove<br>R rotate</div>`;
-
-  bar.querySelectorAll('[data-b]').forEach((el) => {
-    el.addEventListener('click', () => { buildPick = el.dataset.b; renderBuildBar(); });
-  });
+  refreshBuildHint();
 }
 
 const shakeVec = new THREE.Vector3();
@@ -565,51 +555,57 @@ addEventListener('mousemove', (e) => {
   pointer.y = -(e.clientY / innerHeight) * 2 + 1;
 });
 
-function buildCellUnderCursor() {
+/** Where the cursor meets the ground, in world metres. */
+function cursorOnGround() {
   raycaster.setFromCamera(pointer, camera);
-  if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return null;
-  const [gx, gz] = worldToCell(hitPoint.x, hitPoint.z);
-  return inGrid(gx, gz) ? [gx, gz] : null;
+  return raycaster.ray.intersectPlane(groundPlane, hitPoint) ? hitPoint : null;
 }
 
-function tryPlace() {
-  if (!buildPick) return;
-  const cell = buildCellUnderCursor();
-  if (!cell) { toast('Outside your plot', 'bad'); return; }
-  const [gx, gz] = cell;
-  const existing = loc.base.get(gx, gz);
-  if (existing && existing.item === buildPick) { toast('Already there', 'bad'); return; }
-  if (!removeItem(state.inv, buildPick, 1)) { toast('None left', 'bad'); return; }
-
-  const replaced = loc.base.place(gx, gz, buildPick, buildRot);
-  if (replaced) addItem(state.inv, replaced.item, 1);
-  state.xp += 2;
-  loc.grass?.refresh(player.position);   // grass gives way to the new piece
-  rebuildColliders();
-  renderBuildBar();
-  save();
-}
-
-function tryRemove() {
-  const cell = buildCellUnderCursor();
-  if (!cell) return;
-  const removed = loc.base.remove(cell[0], cell[1]);
-  if (!removed) return;
-  if (removed.contents) {
-    for (const s of removed.contents) if (s) addItem(state.inv, s.id, s.n, s.dur);
+/** Everything a piece must not be dropped on top of. */
+function obstructedAt(x, z) {
+  for (const n of loc.nodes) {
+    if (!n.alive) continue;
+    if ((n.position.x - x) ** 2 + (n.position.z - z) ** 2 < (n.radius + 0.4) ** 2) return true;
   }
-  addItem(state.inv, removed.item, 1);
-  loc.grass?.refresh(player.position);    // and grows back where it stood
+  for (const c of loc.containers) {
+    if ((c.position.x - x) ** 2 + (c.position.z - z) ** 2 < (c.radius + 0.4) ** 2) return true;
+  }
+  return false;
+}
+
+function afterBuildChange() {
+  loc.grass?.refresh(player.position);   // grass gives way, or grows back
   rebuildColliders();
-  renderBuildBar();
+  refreshBuildMenu();
   save();
+}
+
+function makeBuilder() {
+  return new BuildController({
+    base: loc.base,
+    station: () => loc.base?.stationAt(player.position) ?? null,
+    onPlaced: (id) => {
+      state.xp += 2;
+      report('build', id, 1);
+      playSound('chop', 0.9);
+      afterBuildChange();
+    },
+    onRemoved: () => afterBuildChange(),
+  });
 }
 
 renderer.domElement.addEventListener('mousedown', (e) => {
-  if (!buildMode) return;
+  if (!buildMode() || isBuildMenuOpen()) return;
   e.preventDefault();
-  if (e.button === 0) tryPlace();
-  if (e.button === 2) tryRemove();
+  if (e.button === 0) {
+    const r = builder.place();
+    if (!r.ok && r.msg) toast(r.msg, 'bad');
+  }
+  if (e.button === 2) {
+    const point = cursorOnGround();
+    const r = point ? builder.removeAt(point) : { ok: false };
+    if (r.ok) toast(r.msg);
+  }
 });
 
 // ---------------------------------------------------------------- panels wiring
@@ -617,7 +613,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
 initPanels({
   onTravel: (id) => travelTo(id),
   onUse: (i) => useItem(i),
-  onChange: () => { rebuildColliders(); if (buildMode) renderBuildBar(); save(); },
+  onChange: () => { rebuildColliders(); refreshBuildMenu(); save(); },
   nearbyStation: () => (loc?.base ? loc.base.stationAt(player.position) : null),
   availableStations: () => {
     const list = ['hands'];
@@ -628,11 +624,23 @@ initPanels({
 });
 onRespawn(respawn);
 
+// Missions announce themselves; the HUD tracker handles the quiet updates.
+onMissionEvent((mission, kind) => {
+  if (kind !== 'complete') return;
+  const xp = mission.reward?.xp ?? 0;
+  toast(`<b>${mission.title}</b> — done${xp ? ` · +${xp} XP` : ''}`, 'info');
+  playSound('pickup', 1.15);
+  const next = activeMission();
+  if (next) setTimeout(() => toast(`<b>New objective</b><br>${next.brief}`, 'info'), 2200);
+  save();
+});
+
 function handlePanelKeys() {
   if (state.hp <= 0) return;   // while you're down, the only option is respawn
   if (input.consumePress('Escape')) {
-    if (isPanelOpen()) closePanels();
-    else if (buildMode) setBuildMode(false);
+    if (isBuildMenuOpen()) closeBuildMenu();
+    else if (isPanelOpen()) closePanels();
+    else if (buildMode()) setBuildMode(false);
     return;
   }
   if (input.consumePress('Tab')) {
@@ -648,7 +656,9 @@ function handlePanelKeys() {
   }
   if (input.consumePress('KeyB')) {
     if (loc.def.id !== 'home') toast('You can only build at home', 'bad');
-    else { closePanels(); setBuildMode(!buildMode); }
+    else if (!buildMode()) { closePanels(); setBuildMode(true); }
+    else if (isBuildMenuOpen()) closeBuildMenu();
+    else openBuildMenu();     // in build mode, B toggles the catalogue back up
   }
 }
 
@@ -671,7 +681,7 @@ function frame() {
     updateSearch(dt, target);
     // Holding the button keeps swinging — the swing cooldown paces it.
     const wantsAttack = input.consumeAttack() || input.attackHeld;
-    if (!buildMode && wantsAttack) attack();
+    if (!buildMode() && wantsAttack) attack();
     else harvester.release();
   } else {
     input.consumeAttack();
@@ -681,11 +691,11 @@ function frame() {
   // Taking the stick back cancels the job — the auto-walk must never feel like
   // it has taken the controls off you.
   const steered = input.forward || input.back || input.left || input.right;
-  const ev = harvester.update(dt, player.weapon, paused || buildMode || steered);
+  const ev = harvester.update(dt, player.weapon, paused || buildMode() || steered);
   if (ev) onHarvestEvent(ev);
 
   player.searching = !!searching;
-  player.update(dt, input, colliders, !paused && !buildMode && !searching);
+  player.update(dt, input, colliders, !paused && !buildMode() && !searching);
 
   // Death can come from any source (zombies, starvation, bad food) — catch it here
   // rather than in whichever system happened to land the last point of damage.
@@ -746,15 +756,22 @@ function frame() {
   // Grass sways and parts around whoever is standing in it.
   loc.grass?.update(dt, player.position);
 
-  if (loc.base) loc.base.animate(clock.elapsedTime);
+  if (loc.base) {
+    loc.base.animate(clock.elapsedTime, player.position, dt);
+    // You step up onto your own deck rather than wading through it.
+    player.setStandHeight(loc.base.surfaceY(player.position.x, player.position.z), dt);
+  }
   if (loc.grave) loc.grave.marker.rotation.y += dt * 2;
 
-  if (buildMode) {
-    // Walls only span one axis, so placing a room means turning them.
-    if (input.consumePress('KeyR')) buildRot = (buildRot + Math.PI / 2) % (Math.PI * 2);
-    const cell = buildCellUnderCursor();
-    if (cell && buildPick) loc.base.showGhost(cell[0], cell[1], buildPick, true, buildRot);
-    else loc.base.hideGhost();
+  if (buildMode()) {
+    if (input.consumePress('KeyR')) builder.rotate();
+    const t = isBuildMenuOpen() ? null : builder.aim(cursorOnGround());
+    const why = document.getElementById('buildwhy');
+    const msg = t && !t.ok ? t.reason : null;
+    why.textContent = msg ?? '';
+    why.classList.toggle('on', !!msg);
+  } else {
+    document.getElementById('buildwhy').classList.remove('on');
   }
 
   // Rigid follow — no smoothing, so the camera never lags or sways behind the player.
@@ -777,8 +794,8 @@ function frame() {
 
   // The interact prompt wins; otherwise show what a swing would work on, so it's
   // clear a tree is a thing you can act on before you take a swing at it.
-  const workable = !paused && !buildMode && !target ? nearestHarvestable(3.2) : null;
-  const promptText = buildMode ? null
+  const workable = !paused && !buildMode() && !target ? nearestHarvestable(3.2) : null;
+  const promptText = buildMode() ? null
     : target ? `<kbd>E</kbd> ${target.label}`
     : workable ? `<kbd>SPACE</kbd> ${workable.label}`
     : null;
@@ -791,8 +808,14 @@ function frame() {
   renderer.render(loc.scene, camera);
 }
 
-// Handy for poking at a live session from the console.
-window.game = { get player() { return player; }, get loc() { return loc; }, state, travelTo };
+// Handy for poking at a live session from the console. `renderer.info` is the
+// only way to see what culling actually saved: renderer.info.render.triangles
+// counts what was drawn, not what exists in the scene.
+window.game = {
+  get player() { return player; },
+  get loc() { return loc; },
+  state, travelTo, renderer, camera,
+};
 
 function resize() {
   camera.aspect = innerWidth / innerHeight;
@@ -810,6 +833,42 @@ addEventListener('beforeunload', () => {
 
 // ---------------------------------------------------------------- boot
 
+/**
+ * Clears bases saved in the old one-piece-per-cell format.
+ *
+ * Old keys were bare coordinates ("2,-1"); every socket now names its layer
+ * ("floor:2,-1"), and the pieces themselves changed shape — walls moved from the
+ * middle of a cell onto its boundary. There is no sensible way to reinterpret
+ * the old layout, and what it held was the auto-placed starter cabin nobody
+ * chose to build. The materials come back so nothing is actually lost.
+ */
+function migrateBase() {
+  const keys = Object.keys(state.base ?? {});
+  if (!keys.some((k) => !k.includes(':'))) return;
+
+  let refunded = 0;
+  for (const cell of Object.values(state.base)) {
+    if (cell.contents) {
+      for (const s of cell.contents) if (s) addItem(state.inv, s.id, s.n, s.dur);
+    }
+    refunded++;
+  }
+  state.base = {};
+
+  // Buildables used to be crafted into inventory items first. Anything still
+  // sitting in the bag would now be unusable, so it goes back to raw materials.
+  for (let i = 0; i < state.inv.length; i++) {
+    const slot = state.inv[i];
+    if (!slot || ITEMS[slot.id]?.cat !== 'build') continue;
+    refunded += slot.n;
+    state.inv[i] = null;
+  }
+  addItem(state.inv, 'wood', Math.min(120, refunded * 6));
+  addItem(state.inv, 'stone', Math.min(80, refunded * 3));
+  setTimeout(() => toast(
+    'Your camp was cleared for the new building system — materials returned', 'info'), 1200);
+}
+
 setLoaderText('LOADING MODELS');
 const assets = await loadModels((d, t) => setLoaderText(`LOADING MODELS  ${d}/${t}`));
 // Trees and rocks are grown rather than loaded, so the world gets real shape
@@ -823,7 +882,8 @@ if (assets.missing.length) {
 
 const returning = load();
 resizeInventory();
-ensureStarterBase();
+migrateBase();
+initBuildMenu(() => builder);
 
 // Build a character before the world exists. Keyed off the character itself,
 // not off save presence — an autosave can fire before the creator ever runs.
@@ -852,7 +912,7 @@ if (returning) {
   const hints = [
     ['Hold <kbd>SPACE</kbd> near a tree or rock to gather', 0],
     ['Press <kbd>C</kbd> to craft — a Stone Axe needs 12 wood + 8 stone', 6000],
-    ['Press <kbd>B</kbd> at camp to place floors and walls', 13000],
+    ['Press <kbd>B</kbd> at camp to build — start with a foundation', 13000],
     ['Press <kbd>M</kbd> to travel once you are equipped', 20000],
   ];
   for (const [text, delay] of hints) setTimeout(() => toast(text, 'info'), delay);

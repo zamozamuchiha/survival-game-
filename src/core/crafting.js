@@ -2,6 +2,7 @@ import { ITEMS } from '../data/items.js';
 import { RECIPES } from '../data/recipes.js';
 import { state, level } from './state.js';
 import { countItem, removeItem, addItem, canFit } from './inventory.js';
+import { report } from './missions.js';
 
 export function recipesFor(station) {
   return RECIPES.filter((r) => r.station === station);
@@ -24,5 +25,6 @@ export function craft(r) {
   addItem(state.inv, r.out.id, r.out.n);
   state.xp += r.xp;
   state.stats.crafted += r.out.n;
+  report('craft', r.out.id, r.out.n);
   return { ok: true, made: `${ITEMS[r.out.id].name} ×${r.out.n}`, xp: r.xp };
 }

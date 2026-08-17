@@ -7,6 +7,15 @@ import { makeRock } from './procgen/rocks.js';
 import { makeTwig, makeLeafLitter } from './procgen/debris.js';
 import { makeBush } from './procgen/bushes.js';
 import { makePlankWall, makePlankFloor, makePlankDoor } from './procgen/timber.js';
+import {
+  makeFoundation, makeRoof, makeStoneWall, makeFence,
+  makeCrate, makeWorkbench, makeCampfire, makeFurnace,
+} from './procgen/structures.js';
+import {
+  makeAxe, makePickaxe, makeCrowbar, makeSpear, makeBat, makeMachete,
+  makePistol, makeRifle,
+} from './procgen/tools.js';
+import { makeLog, makeBranch, makeFirewood, makeStump } from './procgen/logs.js';
 
 // Central model registry. Everything the game renders looks up a key here.
 //
@@ -183,19 +192,58 @@ export const GENERATED = {
   bush_e: (rng) => makeBush(rng, 'low'),
   bush_f: (rng) => makeBush(rng, 'low'),
 
-  // Built timber. Several variants of each so a wall of them isn't one board
-  // pattern repeated down the row.
-  plank_wall_a: (rng) => makePlankWall(rng, { deck: 2.0 }),
-  plank_wall_b: (rng) => makePlankWall(rng, { deck: 2.0 }),
-  plank_wall_c: (rng) => makePlankWall(rng, { brace: false, deck: 2.0 }),
-  // Half-width walls for the corner and tee segments, built at that size rather
-  // than squashed down from a full one — squashing narrows every board and turns
-  // the nail heads into ellipses.
-  plank_wall_half_a: (rng) => makePlankWall(rng, { width: 1.0, brace: false, deck: 2.0 }),
-  plank_wall_half_b: (rng) => makePlankWall(rng, { width: 1.0, brace: false, deck: 2.0 }),
+  // The buildable kit. Several variants of each, so a row of walls isn't one
+  // board pattern repeated down the line.
+  //
+  // Nothing here decks its own cell any more: walls stand on the boundary
+  // between two cells and floors fill the cells themselves, so the two already
+  // meet with no gap and no overlap.
+  plank_wall_a: (rng) => makePlankWall(rng),
+  plank_wall_b: (rng) => makePlankWall(rng),
+  plank_wall_c: (rng) => makePlankWall(rng, { brace: false }),
   plank_floor_a: (rng) => makePlankFloor(rng),
   plank_floor_b: (rng) => makePlankFloor(rng),
-  plank_door_a: (rng) => makePlankDoor(rng, { deck: 2.0 }),
+  plank_floor_c: (rng) => makePlankFloor(rng),
+  plank_door_a: (rng) => makePlankDoor(rng),
+  plank_door_b: (rng) => makePlankDoor(rng),
+
+  found_a: (rng) => makeFoundation(rng),
+  found_b: (rng) => makeFoundation(rng),
+  roof_a: (rng) => makeRoof(rng),
+  roof_b: (rng) => makeRoof(rng),
+  stonewall_a: (rng) => makeStoneWall(rng),
+  stonewall_b: (rng) => makeStoneWall(rng),
+  fence_a: (rng) => makeFence(rng),
+  fence_b: (rng) => makeFence(rng),
+  crate_a: (rng) => makeCrate(rng),
+  crate_b: (rng) => makeCrate(rng),
+  bench_a: (rng) => makeWorkbench(rng),
+  bench_b: (rng) => makeWorkbench(rng),
+  firepit_a: (rng) => makeCampfire(rng),
+  firepit_b: (rng) => makeCampfire(rng),
+  furnace_a: (rng) => makeFurnace(rng),
+
+  // Hand tools and weapons. Keys match the item ids in data/items.js so the
+  // player can look one up directly by what it has equipped.
+  tool_axe_stone:  (rng) => makeAxe(rng, 'stone'),
+  tool_axe_iron:   (rng) => makeAxe(rng, 'iron'),
+  tool_pick_stone: (rng) => makePickaxe(rng, 'stone'),
+  tool_pick_iron:  (rng) => makePickaxe(rng, 'iron'),
+  tool_crowbar:    (rng) => makeCrowbar(rng),
+  tool_spear:      (rng) => makeSpear(rng),
+  tool_bat:        (rng) => makeBat(rng),
+  tool_machete:    (rng) => makeMachete(rng),
+  tool_pistol:     (rng) => makePistol(rng),
+  tool_rifle:      (rng) => makeRifle(rng),
+
+  // Round timber. Bark outside, growth rings on every cut face — the kit models
+  // these replace carried their own texture and no longer matched the boards.
+  pickup_wood_a: (rng) => makeFirewood(rng),
+  pickup_wood_b: (rng) => makeLog(rng, { length: 0.62, radius: 0.09 }),
+  log_a: (rng) => makeLog(rng, { length: 1.5, radius: 0.16 }),
+  log_b: (rng) => makeLog(rng, { length: 0.9, radius: 0.12 }),
+  branch_a: (rng) => makeBranch(rng),
+  stump: (rng) => makeStump(rng),
 
   twig_a: (rng) => makeTwig(rng),
   twig_b: (rng) => makeTwig(rng),
@@ -306,7 +354,7 @@ export function getModel(key) {
 }
 
 /**
- * Strips translation tracks from a clip, keeping rotation (and scale).
+ * Strips translation tracks from a clip, keeping rotation and scale.
  *
  * Two reasons. First, Mixamo clips animate hip POSITION in the source model's
  * unit scale — donate Soldier's walk to Xbot, whose skeleton is ~100x smaller
@@ -315,6 +363,15 @@ export function getModel(key) {
  * root motion would fight the movement system anyway.
  */
 function stripRootMotion(clip) {
+  // Scale tracks stay. Measuring a model leaves its skeleton in the bind pose
+  // (see localBounds), which costs the bones their rest scale — so the clips are
+  // the only thing left putting it back, every frame. Strip them and the whole
+  // skeleton collapses to a couple of centimetres and the character vanishes.
+  //
+  // These once caused the tool in the character's hand to come out the wrong
+  // size. That is now handled where it belongs, in Player.fitHeldSlot, which
+  // re-derives the hand slot's counter-scale every frame and so does not care
+  // what the animation does to the bone.
   const tracks = clip.tracks.filter((t) => !t.name.endsWith('.position'));
   if (tracks.length === clip.tracks.length) return clip;
   const out = clip.clone();
@@ -432,6 +489,13 @@ function localBounds(root) {
       // is ~100x off from the space the bones actually live in. Measuring the
       // geometry directly reports a 1.8m human as 1.8cm. Pose the skeleton and
       // let three transform the vertices through it for a true measurement.
+      //
+      //
+      // This leaves the skeleton posed, and that is deliberate: the bind pose is
+      // the pose the locomotion clips are authored against, so it is also the
+      // right pose to leave the model standing in. What it costs is the bones'
+      // rest position and scale, which the clips must therefore carry — see
+      // stripRootMotion.
       o.skeleton.pose();
       o.updateMatrixWorld(true);
       o.computeBoundingBox();
@@ -439,6 +503,7 @@ function localBounds(root) {
         tmp.copy(o.boundingBox).applyMatrix4(rel);
         box.union(tmp);
       }
+
       return;
     }
 
@@ -446,6 +511,95 @@ function localBounds(root) {
     if (!o.geometry.boundingBox) return;
     tmp.copy(o.geometry.boundingBox).applyMatrix4(rel);
     box.union(tmp);
+  });
+  return box;
+}
+
+/**
+ * Stands a skinned model up without turning it round.
+ *
+ * These exports come out of the measurement pose inverted — head below feet —
+ * while already facing the right way. There is exactly one rotation that fixes
+ * "up" and leaves "forward" alone, and it is the half turn about Z: a half turn
+ * about X would fix up by swinging the model through its own facing, which is
+ * how you get a character that walks backwards.
+ *
+ * The cost is that left and right are mirrored, which for a humanoid is the
+ * unavoidable half of the trade — no rotation fixes up, keeps forward, and keeps
+ * handedness all at once.
+ *
+ * Measured, not hardcoded: the convention varies between sources, and judging it
+ * has to happen with a clip actually driving the bones, since the rest pose on
+ * its own always reads upright.
+ */
+export function uprightSkeleton(root) {
+  root.updateMatrixWorld(true);
+
+  let head = null;
+  let foot = null;
+  root.traverse((o) => {
+    if (!o.isBone) return;
+    const n = o.name.toLowerCase();
+    if (!head && n.includes('head')) head = o;
+    if (!foot && n.includes('foot')) foot = o;
+  });
+  if (!head || !foot) return root;
+
+  if (head.getWorldPosition(new THREE.Vector3()).y
+    < foot.getWorldPosition(new THREE.Vector3()).y) {
+    root.rotateZ(Math.PI);
+    root.updateMatrixWorld(true);
+    // Recorded so anything hung off a bone can undo it. A tool is modelled
+    // around its grip with the working end down, and it inherits this turn from
+    // the skeleton — leave it uncorrected and the axe is carried head-up.
+    root.userData.uprightFlipped = true;
+  }
+
+  // Re-seat the feet. The turn swings the figure about the model origin, so the
+  // ground offset fitHeight worked out is now upside down with it.
+  const box = posedBounds(root);
+  if (!box.isEmpty()) {
+    root.position.y -= box.min.y;
+    root.updateMatrixWorld(true);
+  }
+  return root;
+}
+
+/**
+ * Measures a skinned model as it is actually posed right now, in its parent's
+ * space.
+ *
+ * Box3.setFromObject reads the bind-pose bounding box and ignores skinning
+ * entirely — it happily reports a correct size for a character that renders as a
+ * speck. Pushing the vertices through the bone transforms is the only
+ * measurement that reflects what ends up on screen.
+ */
+function posedBounds(root) {
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  const inv = new THREE.Matrix4();
+  root.updateMatrixWorld(true);
+  if (root.parent) {
+    root.parent.updateMatrixWorld(true);
+    inv.copy(root.parent.matrixWorld).invert();
+  }
+
+  root.traverse((o) => {
+    if (!o.isSkinnedMesh || !o.geometry?.attributes?.position) return;
+    // updateMatrixWorld does not refresh the bone matrices — those are rebuilt
+    // during render. Without this the samples come from the pose as it was one
+    // step ago, which is how a re-seated character ends up hovering.
+    o.skeleton.update();
+    const pos = o.geometry.attributes.position;
+    // A few hundred samples is plenty for an extent, and keeps this off the
+    // frame budget on a 30k-vertex character.
+    const step = Math.max(1, Math.floor(pos.count / 600));
+    for (let i = 0; i < pos.count; i += step) {
+      v.fromBufferAttribute(pos, i);
+      o.applyBoneTransform(i, v);
+      v.applyMatrix4(o.matrixWorld).applyMatrix4(inv);
+      box.expandByPoint(v);
+    }
   });
   return box;
 }
@@ -463,6 +617,7 @@ export function fitHeight(object, height) {
   object.scale.setScalar(s);
   object.position.y = -box.min.y * s;
   object.userData.fitSize = size.clone().multiplyScalar(s);
+
   return object;
 }
 

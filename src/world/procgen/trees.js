@@ -16,12 +16,34 @@ import { leafBuffer, leafGeometry, leafSpray, pushLeaf } from './foliage.js';
 const UP = new THREE.Vector3(0, 1, 0);
 
 /**
+ * Bark relief, as a fraction of the radius to cut away.
+ *
+ * Layered sine bands in the angular direction give ridges of varying width, and
+ * because the phase barely moves with t they run up the trunk the way real
+ * furrows do. Taking the absolute value turns the smooth waves into sharp
+ * valleys with rounded ridges between them, which is the shape of bark.
+ *
+ * This is displacement, not a texture: it changes the silhouette, so the trunk
+ * still reads as bark where it crosses the sky and where it catches raking light
+ * — the two places a normal map gives itself away.
+ */
+function barkFurrow(a, t, seed) {
+  let v = Math.sin(a * 9 + seed * 1.7 + t * 1.4) * 0.52
+        + Math.sin(a * 17 + seed * 3.1 - t * 0.9) * 0.3
+        + Math.sin(a * 29 + seed * 5.3 + t * 2.6) * 0.18;
+  // Cross-breaks, so the furrows are plates rather than uninterrupted combing.
+  v *= 0.82 + Math.sin(t * 33 + a * 2.3 + seed) * 0.18;
+  return Math.min(1, Math.abs(v));
+}
+
+/**
  * A tapered, irregular tube along a path.
  *
  * Radius wobble is driven off the point index and angle rather than random per
  * vertex, so the surface stays continuous instead of turning into noise.
+ * `relief` carves bark furrows into it — see barkFurrow.
  */
-function limbGeometry(points, radii, { radial = 7, wobble = 0.16, seed = 0 }) {
+function limbGeometry(points, radii, { radial = 7, wobble = 0.16, seed = 0, relief = 0 }) {
   const curve = new THREE.CatmullRomCurve3(points);
   const steps = Math.max(2, points.length * 3);
   const positions = [];
@@ -49,7 +71,9 @@ function limbGeometry(points, radii, { radial = 7, wobble = 0.16, seed = 0 }) {
       const dent = 1
         + Math.sin(a * 3 + seed + t * 4) * wobble
         + Math.sin(a * 7 - seed * 2 + t * 9) * wobble * 0.45;
-      const r = baseR * dent;
+      // Bark eats into the radius rather than standing proud of it, so the
+      // trunk keeps the thickness its profile asked for.
+      const r = baseR * dent * (relief > 0 ? 1 - barkFurrow(a, t, seed) * relief : 1);
       const cos = Math.cos(a);
       const sin = Math.sin(a);
       nrm.set(N.x * cos + B.x * sin, N.y * cos + B.y * sin, N.z * cos + B.z * sin);
@@ -75,6 +99,10 @@ function limbGeometry(points, radii, { radial = 7, wobble = 0.16, seed = 0 }) {
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(indices);
+  // The analytic normals above point straight out from the spine, which is only
+  // true for a smooth tube. Once the surface is furrowed they have to come from
+  // the geometry, or the ridges are lit as though they were not there.
+  if (relief > 0) geo.computeVertexNormals();
   return geo;
 }
 
@@ -145,8 +173,10 @@ function grow(rng, profile) {
     radii.push(baseRadius * (0.25 + taper * 0.75) * flare);
   }
 
+  // The trunk is what the player walks up to, so it gets the segment count that
+  // lets bark exist as geometry: at 9 around there is nowhere to put a furrow.
   barkParts.push(limbGeometry(spine, radii, {
-    radial: 9, wobble: profile.gnarl, seed: rng() * 6,
+    radial: 20, wobble: profile.gnarl, seed: rng() * 6, relief: profile.barkRelief ?? 0.16,
   }));
 
   // --- limbs: recurse off the trunk, thinning each generation --------------
@@ -166,7 +196,10 @@ function grow(rng, profile) {
       pts.push(cur.clone());
     }
     const prof = [radius, radius * 0.62, radius * 0.3, radius * 0.14];
-    barkParts.push(limbGeometry(pts, prof, { radial: depth === 0 ? 7 : 5, wobble: 0.2, seed: rng() * 6 }));
+    barkParts.push(limbGeometry(pts, prof, {
+      radial: depth === 0 ? 10 : 5, wobble: 0.2, seed: rng() * 6,
+      relief: depth === 0 ? (profile.barkRelief ?? 0.16) * 0.6 : 0,
+    }));
 
     const tip = pts[pts.length - 1];
     if (depth < profile.depth) {
@@ -261,21 +294,21 @@ export const TREE_PROFILES = {
     // clumps = leaf sprays per twig end, leaves = individual leaves per spray.
     depth: 1, reach: 0.55, spiral: 1.6, clumps: [5, 6], leaves: [18, 26],
     leafSize: 1.05, crown: 1.2, mass: 0.60,
-    bark: 'bark', leaf: 0x8fae5c,
+    bark: 'bark', barkRelief: 0.20, leaf: 0x8fae5c,
   },
   pine: {
     height: [6.0, 8.6], thickness: [0.028, 0.038], taper: 2.4, trunkRun: 0.94,
     lean: 0.04, gnarl: 0.12, limbs: [8, 11], limbLen: [0.16, 0.26], branchFrom: 0.28,
     depth: 1, reach: 0.15, spiral: 2.4, clumps: [4, 5], leaves: [16, 22],
     leafSize: 0.7, crown: 0.95, mass: 0.55,
-    bark: 'barkDark', leaf: 0x6f9450,
+    bark: 'barkDark', barkRelief: 0.15, leaf: 0x6f9450,
   },
   dead: {
     height: [3.8, 5.6], thickness: [0.040, 0.055], taper: 1.7, trunkRun: 0.78,
     lean: 0.16, gnarl: 0.28, limbs: [4, 6], limbLen: [0.26, 0.40], branchFrom: 0.35,
     depth: 2, reach: 0.35, spiral: 1.2, clumps: [0, 0], leaves: [0, 0],
     leafSize: 0, crown: 0, mass: 0,
-    bark: 'barkPale', leaf: 0x6b6a4a,
+    bark: 'barkPale', barkRelief: 0.26, leaf: 0x6b6a4a,
   },
 };
 

@@ -1,6 +1,7 @@
 import { ITEMS, FISTS } from '../data/items.js';
 import { state, level, carriedWeight, carryLimit, armorRating } from '../core/state.js';
 import { ENERGY_MAX } from '../data/locations.js';
+import { activeMission, activeProgress } from '../core/missions.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -17,7 +18,41 @@ const els = {
   weapon: $('chip-weapon'), weight: $('chip-weight'), armor: $('chip-armor'),
   prompt: $('prompt'), promptText: $('prompt-text'),
   searchbar: $('searchbar'), searchFill: $('searchbar').querySelector('i'),
+  mission: $('mission'), missionTitle: $('mission-title'), missionGoals: $('mission-goals'),
 };
+
+// Rebuilding the objective list every frame would fight the CSS transitions and
+// churn the DOM for nothing, so it's only redrawn when the text would change.
+let missionSignature = '';
+
+/**
+ * Draws the objective tracker.
+ *
+ * The hint only shows while nothing has been done yet — once the player is
+ * clearly getting on with it, telling them which key to press is noise.
+ */
+function updateMission() {
+  const mission = activeMission();
+  if (!mission) {
+    els.mission.classList.add('hide');
+    missionSignature = '';
+    return;
+  }
+  els.mission.classList.remove('hide');
+
+  const progress = activeProgress();
+  const signature = `${mission.id}|${progress.join(',')}`;
+  if (signature === missionSignature) return;
+  missionSignature = signature;
+
+  els.missionTitle.textContent = mission.title;
+  const untouched = progress.every((p) => p === 0);
+  els.missionGoals.innerHTML = mission.goals.map((g, i) => {
+    const have = progress[i] ?? 0;
+    return `<div class="goal${have >= g.n ? ' done' : ''}">
+      <span>${g.label}</span><i>${have}/${g.n}</i></div>`;
+  }).join('') + (untouched && mission.hint ? `<div class="mhint">${mission.hint}</div>` : '');
+}
 
 const TIER_LABEL = ['STARTING AREA', 'LOW THREAT', 'MODERATE THREAT', 'EXTREME THREAT'];
 
@@ -28,6 +63,7 @@ const mmss = (s) => {
 };
 
 export function updateHud(locDef, prompt, search) {
+  updateMission();
   fill.hp.style.width = `${state.hp}%`;
   fill.food.style.width = `${state.hunger}%`;
   fill.water.style.width = `${state.thirst}%`;

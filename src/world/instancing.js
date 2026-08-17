@@ -51,21 +51,47 @@ export class InstanceBatch {
     return true;
   }
 
-  /** Builds the InstancedMeshes. Call once, after every add(). */
-  build() {
+  /**
+   * Builds the InstancedMeshes, split into spatial blocks.
+   *
+   * One batch per model spread over the whole map has map-sized bounds, so the
+   * only options are to draw all of it or none of it — which is why this used to
+   * disable frustum culling entirely and pay for every tree behind the camera.
+   *
+   * Chopping each batch into BLOCK-metre tiles gives every mesh bounds the
+   * culler can actually use. It costs more draw calls in principle, but only the
+   * blocks in view are submitted, and with a camera that sees a fraction of the
+   * map that is a large net win.
+   */
+  build({ block = 26 } = {}) {
     const root = new THREE.Group();
-    for (const g of this.groups.values()) {
+    const pos = new THREE.Vector3();
+
+    for (const [id, g] of this.groups) {
       if (!g.matrices.length) continue;
-      const im = new THREE.InstancedMesh(g.geometry, g.material, g.matrices.length);
-      g.matrices.forEach((m, i) => im.setMatrixAt(i, m));
-      im.instanceMatrix.needsUpdate = true;
-      im.castShadow = true;
-      // Thin foliage renders black if it takes shadows — see procgen/bushes.js.
-      im.receiveShadow = !g.noReceiveShadow;
-      // Instances are spread across the whole map, so the batch's bounds are
-      // effectively the map — culling it as one unit only ever costs us.
-      im.frustumCulled = false;
-      root.add(im);
+
+      // Bucket this group's instances by which tile their origin falls in.
+      const tiles = new Map();
+      for (const m of g.matrices) {
+        pos.setFromMatrixPosition(m);
+        const key = `${Math.floor(pos.x / block)},${Math.floor(pos.z / block)}`;
+        if (!tiles.has(key)) tiles.set(key, []);
+        tiles.get(key).push(m);
+      }
+
+      for (const list of tiles.values()) {
+        const im = new THREE.InstancedMesh(g.geometry, g.material, list.length);
+        list.forEach((m, i) => im.setMatrixAt(i, m));
+        im.instanceMatrix.needsUpdate = true;
+        im.castShadow = true;
+        // Thin foliage renders black if it takes shadows — see procgen/bushes.js.
+        im.receiveShadow = !g.noReceiveShadow;
+        im.frustumCulled = true;
+        // three's own bounds ignore instance transforms on some paths; deriving
+        // the sphere from the instance positions keeps the culler honest.
+        im.computeBoundingSphere();
+        root.add(im);
+      }
     }
     return root;
   }

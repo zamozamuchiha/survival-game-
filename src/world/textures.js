@@ -207,41 +207,196 @@ function buildTimber(size, seed, tint) {
   const height = new Float32Array(size * size);
   const rough = new Float32Array(size * size);
   const knots = new Float32Array(size * size);
+  const late = new Float32Array(size * size);    // dense latewood bands
+  const grime = new Float32Array(size * size);
   const s = 6;
+
+  // Flat-sawn timber: the saw passes to one side of the pith, so the growth
+  // rings surface as nested arcs — the "cathedral" figure that is the single
+  // most recognisable thing about a real board. The pith sits off the plank, and
+  // the rings are the level sets of the distance to it.
+  const pithV = -1.7;                              // heart of the tree, off-board
+  const ringFreq = 26;
+
+  // A handful of knots per board, each with a position and a size. The grain has
+  // to bend around these, not just darken: a knot with straight grain running
+  // through it reads as a printed dot.
+  const knotList = [];
+  const knotCount = 2 + Math.floor(hash2(seed, 7, 3) * 3);
+  for (let k = 0; k < knotCount; k++) {
+    knotList.push({
+      u: hash2(seed + k * 13, 1, 11) * s,
+      v: hash2(seed + k * 13, 2, 17) * s,
+      r: 0.10 + hash2(seed + k * 13, 3, 23) * 0.16,
+    });
+  }
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const u = (x / size) * s;
-      const v = (y / size) * s;
-      const fibre = fbm(u, v, seed, 4, 9.0, 0.5);
-      const split = ridge(u, v, seed + 3, 2, 5.0, 0.6) * 0.35;
-      // Knots: rare, round, sunk into the board with the grain swirling round
-      // them. Without these a plank reads as striped paper.
-      const knot = Math.pow(fbm(u * 0.9, v * 2.2, seed + 19, 2), 7) * 3.0;
-      const h = fibre * 0.65 + split - Math.min(0.5, knot);
       const i = y * size + x;
+      let u = (x / size) * s;
+      const v = (y / size) * s;
+
+      // Pull the grain around each knot. Displacing the sample point is what
+      // makes the rings sweep past it the way fibres divert around a branch.
+      let knot = 0;
+      for (const kn of knotList) {
+        const du = u - kn.u;
+        const dv = v - kn.v;
+        const d = Math.hypot(du, dv);
+        if (d < kn.r * 4.5) {
+          const pull = Math.exp(-(d * d) / (kn.r * kn.r * 2.2));
+          u += dv * pull * 1.7;                    // swirl the grain aside
+          knot = Math.max(knot, Math.exp(-(d * d) / (kn.r * kn.r * 0.55)));
+        }
+      }
+      knots[i] = knot;
+
+      // Growth rings. Warping the distance before taking the ring phase gives
+      // the wandering, non-concentric arcs of real timber instead of a rule.
+      const warp = (fbm(u * 0.5, v * 0.5, seed + 5, 3) - 0.5) * 0.9;
+      const dist = Math.hypot(u * 0.32 + warp, v - pithV);
+      const ring = 0.5 - 0.5 * Math.cos(dist * ringFreq);
+      // Latewood is the narrow dark half of each ring, and it is harder — so it
+      // stands proud when the softer earlywood weathers back.
+      const band = Math.pow(ring, 2.4);
+      late[i] = band;
+
+      // Fibres. Broad and soft on purpose: the visible grain of a board is its
+      // growth rings, and piling fine streaks on top of them turns the whole
+      // surface into corduroy rather than wood.
+      const fibre = fbm(u, v, seed, 3, 6.5, 0.8);
+      // Vessels: the open pores of a hardwood, scattered rather than combed.
+      const pores = Math.pow(fbm(u * 2.4, v * 2.4, seed + 47, 2, 3.0, 1.0), 3.5) * 0.5;
+      // Checks: splits that open along the grain as the board dries.
+      const check = Math.pow(ridge(u * 1.1, v, seed + 3, 2, 2.2, 14.0), 6) * 0.8;
+
+      grime[i] = Math.pow(fbm(u * 0.6, v * 0.6, seed + 61, 3), 2.0);
+
+      // Rings carry the relief; everything else only breaks them up.
+      const h = band * 0.52 + fibre * 0.16 - pores * 0.2 - check - knot * 0.45;
       height[i] = h;
-      knots[i] = Math.min(1, knot * 2);
-      rough[i] = 0.66 + h * 0.26;
+      // Dense latewood and knots polish up; open earlywood and splits stay matt.
+      rough[i] = 0.94 - band * 0.2 - knot * 0.14 + check * 0.08 + pores * 0.05 - grime[i] * 0.05;
     }
   }
 
   const base = colorMap(size, (x, y, out) => {
     const i = y * size + x;
     const h = height[i];
-    const shade = mix(0.6, 1.15, h);
-    // Long streaks of slightly different timber colour.
-    const streak = fbm((x / size) * 2, (y / size) * 2, seed + 31, 3, 8, 0.6) * 0.3 + 0.85;
-    // Knots are darker and redder than the board around them.
+    const band = late[i];
     const k = knots[i];
-    out[0] = tint[0] * shade * streak * (1 - k * 0.45);
-    out[1] = tint[1] * shade * streak * 0.98 * (1 - k * 0.62);
-    out[2] = tint[2] * shade * streak * 0.94 * (1 - k * 0.70);
+    const dirt = grime[i];
+
+    // Colour comes mostly from the rings: latewood is markedly darker and
+    // warmer than the earlywood beside it. That contrast is the grain.
+    const ringShade = mix(1.12, 0.62, band);
+    // Broad drifts of lighter and darker timber down the length of the board.
+    const drift = fbm((x / size) * 1.6, (y / size) * 1.6, seed + 31, 3, 6, 0.5) * 0.26 + 0.87;
+    const relief = mix(0.9, 1.08, h);
+    const shade = ringShade * drift * relief;
+
+    // Knots: dark, red, and the heart of the knot darker still.
+    const kd = 1 - k * 0.55;
+    // Grime greys the timber down where hands and weather get at it.
+    const g = 1 - dirt * 0.22;
+
+    out[0] = tint[0] * shade * kd * g;
+    out[1] = tint[1] * shade * (1 - k * 0.68) * (g - dirt * 0.02);
+    out[2] = tint[2] * shade * (1 - k * 0.76) * (g - dirt * 0.03);
   });
 
   return {
     map: makeTexture(base, { srgb: true }),
-    normalMap: makeTexture(normalFromHeight(height, size, 1.9)),
+    normalMap: makeTexture(normalFromHeight(height, size, 1.5)),
+    roughnessMap: makeTexture(greyMap(rough, size)),
+  };
+}
+
+/**
+ * The cut end of a board or log: growth rings seen square on.
+ *
+ * Completely different from the face grain, and that difference is the whole
+ * point — an end that shows the same long streaks as the face is the clearest
+ * sign that a texture has simply been wrapped round a box.
+ */
+function buildTimberEnd(size, seed, tint) {
+  const height = new Float32Array(size * size);
+  const rough = new Float32Array(size * size);
+  const late = new Float32Array(size * size);
+  const s = 2.4;
+  // The pith is off centre. It always is — a tree grows towards the light, and a
+  // stump with the heart dead in the middle is the first thing that reads as
+  // drawn rather than cut.
+  const cx = s * 0.5 + (hash2(seed, 1, 5) - 0.5) * 0.22;
+  const cy = s * 0.5 + (hash2(seed, 2, 7) - 0.5) * 0.22;
+
+  // One entry per year of growth, each with its own width. Wide near the heart
+  // where the young tree raced up, narrowing as it aged, and every year scaled
+  // by how good that year was. Evenly spaced rings are a target, not a tree.
+  const bounds = [0];
+  for (let k = 0; k < 90 && bounds[bounds.length - 1] < s; k++) {
+    const age = 1 - Math.min(1, k / 70);                 // juvenile growth is wider
+    const season = 0.35 + hash2(seed + 3, k, 13) * 1.3;  // good years and bad
+    bounds.push(bounds[bounds.length - 1] + 0.012 + 0.052 * age * season);
+  }
+
+  // Reaction wood: a leaning trunk lays down more on one side, so the rings sit
+  // off-centre as well as spaced unevenly.
+  const leanAng = hash2(seed, 4, 17) * Math.PI * 2;
+  const leanAmt = 0.1 + hash2(seed, 5, 19) * 0.16;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const u = (x / size) * s;
+      const v = (y / size) * s;
+      const du = u - cx;
+      const dv = v - cy;
+
+      // Rings are never truly round: warp the radius and squash one axis.
+      const warp = (fbm(u * 1.4, v * 1.4, seed + 9, 3) - 0.5) * 0.3;
+      const ang = Math.atan2(dv, du);
+      const lean = 1 - Math.cos(ang - leanAng) * leanAmt;
+      const r = (Math.hypot(du * 1.06, dv * 0.94) + warp) * lean;
+
+      // Which year's ring is this, and how far through it? Earlywood is the pale
+      // open first half, latewood the dark dense band that closes it.
+      let k = 1;
+      while (k < bounds.length - 1 && bounds[k] < r) k++;
+      const inner = bounds[k - 1];
+      const span = Math.max(1e-4, bounds[k] - inner);
+      const through = Math.min(1, Math.max(0, (r - inner) / span));
+      const band = Math.pow(through, 3.0);
+      late[i] = band;
+
+      // Medullary rays: fine spokes running out from the pith.
+      const rays = Math.pow(0.5 + 0.5 * Math.cos(ang * 46 + warp * 8), 6) * 0.35;
+      // Radial checks: a cut end dries fastest and splits outward from the pith.
+      const checkSeed = Math.pow(0.5 + 0.5 * Math.cos(ang * 7 + fbm(r * 2, 0, seed + 3, 2) * 5), 22);
+      const check = checkSeed * Math.min(1, r * 1.6) * 0.85;
+      // The pith itself: a soft dark centre.
+      const pith = Math.exp(-(r * r) / 0.004);
+
+      const h = band * 0.5 + rays * 0.3 - check - pith * 0.4;
+      height[i] = h;
+      rough[i] = 0.97 - band * 0.16 + check * 0.03;
+    }
+  }
+
+  const base = colorMap(size, (x, y, out) => {
+    const i = y * size + x;
+    const band = late[i];
+    // End grain is paler and more open than the face — it is raw cut fibre.
+    const shade = mix(1.2, 0.66, band) * mix(0.94, 1.06, height[i]);
+    out[0] = tint[0] * shade * 1.06;
+    out[1] = tint[1] * shade * 1.02;
+    out[2] = tint[2] * shade * 0.94;
+  });
+
+  return {
+    map: makeTexture(base, { srgb: true }),
+    normalMap: makeTexture(normalFromHeight(height, size, 2.0)),
     roughnessMap: makeTexture(greyMap(rough, size)),
   };
 }
@@ -377,6 +532,67 @@ function buildGround(size, seed, soil, grass) {
   };
 }
 
+/**
+ * Worked metal: forged unevenness, grinding marks along one axis, scratches and
+ * pitting from use.
+ *
+ * The roughness map does most of the work here. A blade that is uniformly shiny
+ * reads as plastic; what makes metal look like metal is that worn spots, scratch
+ * lines and pits all catch the light differently from the ground faces around
+ * them.
+ */
+function buildMetal(size, seed, tint, { rust = 0 } = {}) {
+  const height = new Float32Array(size * size);
+  const rough = new Float32Array(size * size);
+  const wear = new Float32Array(size * size);
+  const s = 5;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = (x / size) * s;
+      const v = (y / size) * s;
+      const i = y * size + x;
+
+      // Hammered/forged undulation, broad and soft.
+      const forged = fbm(u, v, seed, 3) * 0.5;
+      // Grinding: fine parallel lines from being dressed on a stone.
+      const grind = fbm(u, v, seed + 4, 2, 22, 0.6) * 0.18;
+      // Scratches: sparse, sharp, crossing the grind at an angle.
+      const scratch = Math.pow(fbm(u * 1.4 + v * 0.5, v * 1.4, seed + 9, 2, 14, 1.1), 6) * 1.6;
+      // Pitting where it has been knocked about.
+      const pits = Math.pow(fbm(u * 7, v * 7, seed + 15, 2), 4) * 0.6;
+
+      height[i] = forged + grind - pits * 0.5 - scratch * 0.2;
+      wear[i] = Math.min(1, scratch + pits * 0.7);
+      // Worn and pitted areas scatter light; dressed faces stay tighter.
+      rough[i] = 0.28 + wear[i] * 0.45 + forged * 0.22;
+    }
+  }
+
+  const base = colorMap(size, (x, y, out) => {
+    const i = y * size + x;
+    const shade = mix(0.72, 1.12, height[i] + 0.3);
+    const w = wear[i];
+    // Rust blooms in patches, strongest where the surface is already pitted.
+    const bloom = rust > 0
+      ? Math.min(1, Math.pow(fbm((x / size) * 2.5, (y / size) * 2.5, seed + 21, 3), 1.8) * 2.2 * rust + w * rust * 0.5)
+      : 0;
+    const r = mix(tint[0], 0.42, bloom);
+    const g = mix(tint[1], 0.22, bloom);
+    const b = mix(tint[2], 0.12, bloom);
+    // Scratches show bright bare metal.
+    out[0] = (r + w * 0.18) * shade;
+    out[1] = (g + w * 0.18) * shade;
+    out[2] = (b + w * 0.18) * shade;
+  });
+
+  return {
+    map: makeTexture(base, { srgb: true }),
+    normalMap: makeTexture(normalFromHeight(height, size, 1.6)),
+    roughnessMap: makeTexture(greyMap(rough, size)),
+  };
+}
+
 // ---------------------------------------------------------------- public
 
 const BUILDERS = {
@@ -384,6 +600,8 @@ const BUILDERS = {
   barkDark:  (size, seed) => buildBark(size, seed, [0.30, 0.24, 0.19]),
   barkPale:  (size, seed) => buildBark(size, seed, [0.55, 0.48, 0.38]),
   timber:    (size, seed) => buildTimber(size, seed, [0.66, 0.50, 0.33]),
+  // Sawn ends. Same timber, seen across the fibres instead of along them.
+  timberEnd: (size, seed) => buildTimberEnd(size, seed, [0.70, 0.55, 0.38]),
   stone:     (size, seed) => buildStone(size, seed, [0.52, 0.51, 0.49]),
   stoneWarm: (size, seed) => buildStone(size, seed, [0.55, 0.48, 0.40]),
   foliage:   (size, seed) => buildFoliage(size, seed, [0.92, 0.95, 0.86]),
@@ -391,6 +609,12 @@ const BUILDERS = {
   // colour through vertex colours, these maps only supply detail and contrast.
   ground:    (size, seed) => buildGround(size, seed, [1.02, 0.92, 0.76], [0.86, 1.05, 0.70]),
   groundDry: (size, seed) => buildGround(size, seed, [1.05, 0.98, 0.84], [0.98, 1.02, 0.78]),
+  // Steel, well used but maintained.
+  metal:     (size, seed) => buildMetal(size, seed, [0.66, 0.68, 0.71], { rust: 0.18 }),
+  // Salvaged iron: neglected, rusting through.
+  metalRust: (size, seed) => buildMetal(size, seed, [0.58, 0.56, 0.54], { rust: 0.7 }),
+  // Knapped stone for the first tools — no grinding marks, heavy pitting.
+  flint:     (size, seed) => buildStone(size, seed, [0.46, 0.45, 0.44]),
 };
 
 /**

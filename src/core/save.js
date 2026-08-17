@@ -1,9 +1,11 @@
 import { state } from './state.js';
 
 const KEY = 'lastlight.save.v1';
+// Explicit allow-list, so nothing transient sneaks into the save. Anything added
+// to state that should survive a reload has to be named here too.
 const FIELDS = ['hp', 'maxHp', 'hunger', 'thirst', 'stamina', 'poison', 'xp',
   'energy', 'inv', 'equip', 'base', 'graves', 'seenLocations', 'stats',
-  'character'];
+  'character', 'missions'];
 
 export function save() {
   try {

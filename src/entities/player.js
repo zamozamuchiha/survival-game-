@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { ITEMS, FISTS } from '../data/items.js';
 import { state, armorRating, carriedWeight, carryLimit } from '../core/state.js';
 import { CharacterRig } from './character.js';
+import { getModel } from '../world/models.js';
 
 const WALK_SPEED = 5.3;
 const SPRINT_SPEED = 8.8;
@@ -10,6 +11,21 @@ const FRICTION = 15;
 const HEIGHT = 1.75;
 
 const mat = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.85, flatShading: true });
+
+// Reused each frame by fitHeldSlot; avoids allocating in the update loop.
+const scratchScale = new THREE.Vector3();
+
+/** Last-resort stand-in for an item with no model of its own yet. */
+function primitiveTool(id, def) {
+  const g = new THREE.Group();
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 6), mat(0x6b4b2f));
+  handle.position.y = -0.3;
+  g.add(handle);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.05), mat(0x9aa3aa));
+  head.position.y = -0.58;
+  g.add(head);
+  return g;
+}
 
 /** Fallback body if the character model didn't load. */
 function primitiveBody() {
@@ -55,16 +71,11 @@ export class Player {
       this.hand = body.userData.hand;
     }
 
-    // Hang the weapon off the right hand bone. Mixamo skeletons carry their own
-    // scale, so counter-scale the slot to keep held items in real metres.
+    // Hang the weapon off the right hand bone. The counter-scaling that keeps
+    // held items life-sized is done per frame in fitHeldSlot().
     this.heldSlot = new THREE.Group();
     this.hand.add(this.heldSlot);
-    this.hand.updateWorldMatrix(true, false);
-    const boneScale = new THREE.Vector3();
-    this.hand.getWorldScale(boneScale);
-    if (boneScale.x > 0.0001) this.heldSlot.scale.setScalar(1 / boneScale.x);
     this.heldId = undefined;
-
     this.mesh.traverse((o) => { o.castShadow = true; });
     this.syncEquipment();
   }
@@ -72,12 +83,50 @@ export class Player {
   get position() { return this.mesh.position; }
   get hp() { return state.hp; }
 
+  /**
+   * Raises the body onto whatever it is standing on.
+   *
+   * Only the visible body moves. `position` is `mesh.position`, and every
+   * collider, reach test and AI target in the game assumes the world is flat at
+   * y = 0 — letting the real position climb 18cm onto a deck would quietly
+   * shorten all of them.
+   */
+  setStandHeight(y, dt) {
+    const body = this.rig?.ok ? this.rig.root : this.fallbackBody;
+    if (!body) return;
+    body.position.y += (y - body.position.y) * Math.min(1, dt * 9);
+  }
+
   get weapon() {
     const eq = state.equip.weapon;
     if (!eq) return FISTS;
     const def = ITEMS[eq.id];
     if (!def || (def.dur && eq.dur <= 0)) return FISTS;
     return def;
+  }
+
+  /**
+   * Sizes the hand slot so a held tool measures in world metres.
+   *
+   * A Mixamo skeleton carries its own scale — this rig's hand sits near 1/100 —
+   * so anything parented to a bone comes out a hundredth of its intended size.
+   *
+   * Re-applied every frame rather than cached, because the figure is not
+   * constant: the bind pose reports one value and the animated pose another,
+   * several times larger. Any one-shot correction is right for one frame and
+   * wrong afterwards. A scale read and a multiply per frame costs nothing.
+   */
+  fitHeldSlot() {
+    if (!this.heldSlot.children.length) return;
+    // The slot is a child of the bone, so its own scale isn't in this figure —
+    // inverting the bone's puts held items back into world metres.
+    this.hand.getWorldScale(scratchScale);
+    if (scratchScale.x > 1e-9) this.heldSlot.scale.setScalar(1 / scratchScale.x);
+
+    // Undo the turn that stood the model up. Tools are modelled around the grip
+    // with the working end pointing down, and hanging off a bone they inherit
+    // that turn — without this the axe is carried head-up against the shoulder.
+    this.heldSlot.rotation.z = this.rig?.flipped ? Math.PI : 0;
   }
 
   /** Rebuilds the held-item mesh whenever the equipped weapon changes. */
@@ -89,42 +138,12 @@ export class Player {
     if (!id) return;
 
     const def = ITEMS[id];
-    const g = new THREE.Group();
-
-    if (def.ranged) {
-      const long = def.maxRange > 40;
-      const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, long ? 0.85 : 0.42), mat(0x33383d));
-      barrel.position.z = long ? 0.4 : 0.2;
-      g.add(barrel);
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.16, 0.22), mat(0x4a4f55));
-      g.add(body);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.09), mat(0x3b2f24));
-      grip.position.y = -0.16;
-      g.add(grip);
-    } else {
-      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.72, 6), mat(0x6b4b2f));
-      handle.position.y = -0.3;
-      g.add(handle);
-      const metal = id.includes('iron') || id === 'machete' ? 0xc2cad1 : id === 'bat' ? 0x8a6a42 : 0x9aa3aa;
-      if (def.tool === 'mine') {
-        const head = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.09, 0.1), mat(metal));
-        head.position.y = -0.62;
-        g.add(head);
-      } else if (id === 'spear') {
-        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.26, 5), mat(metal));
-        tip.position.y = -0.74;
-        tip.rotation.x = Math.PI;
-        g.add(tip);
-      } else {
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.3, 0.22), mat(metal));
-        blade.position.set(0, -0.6, 0.08);
-        g.add(blade);
-      }
-    }
+    // Real tools are modelled in world/procgen/tools.js, keyed by item id. The
+    // primitive build below is only a stand-in for anything not modelled yet.
+    const g = getModel(`tool_${id}`) ?? primitiveTool(id, def);
 
     // Tip it forward out of the fist. Guns point ahead; melee hangs down the arm.
     g.rotation.x = def.ranged ? -Math.PI / 2 : -0.45;
-    g.scale.setScalar(1.35);   // the arm is scaled down inside the rig
     g.traverse((o) => { o.castShadow = true; });
     this.heldSlot.add(g);
   }
@@ -176,6 +195,7 @@ export class Player {
     this.swingTimer = Math.max(0, this.swingTimer - dt);
     this.hurtFlash = Math.max(0, this.hurtFlash - dt);
     this.busy = Math.max(0, this.busy - dt);
+    this.fitHeldSlot();
     this.syncEquipment();
 
     if (state.hp <= 0) {

@@ -1,308 +1,174 @@
 import * as THREE from 'three';
-import { ITEMS } from '../data/items.js';
 import { state } from '../core/state.js';
 import { makeSlots } from '../core/inventory.js';
-import { getModel, fitHeight } from './models.js';
+import { getModel } from './models.js';
+import {
+  LAYERS, blueprint, socketOf,
+  CELL, WALL_H, FOUND_TOP, DECK_TOP, PLOT, CAMP_CLEAR_HALF,
+} from '../data/building.js';
 
-export const CELL = 2;
-export const GRID = 3; // cells from centre in each direction — a 14x14m plot
+// The base the player builds, held as sockets rather than as whole cells.
+//
+// Every cell carries one slot per layer — a foundation, a floor, a roof and one
+// object — plus a wall slot on each of its four boundaries. So a square can hold
+// a floor, four walls and a crate at the same time, which a one-piece-per-cell
+// grid cannot.
+//
+// Walls living on the boundary rather than inside a square is the whole point:
+// a floor fills its square right out to the edge and the wall stands exactly on
+// the seam, so the two meet with no gap and no overlap, and a room is the size
+// of the squares inside it.
 
-/** Half-width of the buildable plot in metres, for whoever needs to draw it. */
-export const PLOT_HALF = GRID * CELL + CELL / 2;
+export { CELL, PLOT, DECK_TOP, WALL_H, FOUND_TOP, CAMP_CLEAR_HALF };
 
-/**
- * The camp you start with: a 5x5-cell cabin — 6x6m of floor inside an unbroken
- * wall ring, with a door in the middle of the south side.
- *
- * Built from the ring outwards rather than listed by hand, so the shape stays
- * easy to change: walls fill the perimeter, floorboards fill everything inside.
- */
-function starterCabin() {
-  const HALF = 2;              // cells from centre to wall — a 5x5 footprint
-  const pieces = [];
-  for (let gx = -HALF; gx <= HALF; gx++) {
-    for (let gz = -HALF; gz <= HALF; gz++) {
-      const onRing = Math.abs(gx) === HALF || Math.abs(gz) === HALF;
-      if (!onRing) {
-        pieces.push({ gx, gz, item: 'floor_wood' });
-      } else if (gx === 0 && gz === HALF) {
-        pieces.push({ gx, gz, item: 'door_wood' });     // the way in, facing south
-      } else {
-        pieces.push({ gx, gz, item: 'wall_wood' });
-      }
-    }
-  }
-  return pieces;
-}
-
-export const STARTER_BASE = starterCabin();
-
-const mat = (c, opts = {}) =>
-  new THREE.MeshStandardMaterial({ color: c, roughness: 0.9, flatShading: true, ...opts });
-
-export const cellKey = (gx, gz) => `${gx},${gz}`;
-export const inGrid = (gx, gz) => Math.abs(gx) <= GRID && Math.abs(gz) <= GRID;
-export const worldToCell = (x, z) => [Math.round(x / CELL), Math.round(z / CELL)];
-export const cellToWorld = (gx, gz) => new THREE.Vector3(gx * CELL, 0, gz * CELL);
-
-// Which model each buildable uses, and how tall it should end up in metres.
-const PIECE_MODELS = {
-  // Timber pieces are built to real size by their generator — boards, joists and
-  // nails are all in metres — so they're placed as-is rather than scaled to fit.
-  floor_wood:  { key: 'plank_floor_a', height: 0.12, asBuilt: true },
-  wall_wood:   { key: 'plank_wall_a',  halfKey: 'plank_wall_half_a', height: 2.1, asBuilt: true },
-  wall_stone:  { key: 'wall_metal',  height: 2.5 },
-  door_wood:   { key: 'plank_door_a',  height: 2.1,  asBuilt: true },
-  box_storage: { key: 'chest',       height: 0.85 },
-  campfire:    { key: 'campfire',    height: 0.5 },
-  workbench:   { key: 'workbench',   height: 1.15 },
-  furnace:     { key: 'workbench_anvil', height: 1.1 },
-  garden_bed:  { key: 'bedroll',     height: 0.3 },
+// 'n' is the boundary between (gx,gz) and (gx,gz-1); 'w' between (gx,gz) and
+// (gx-1,gz). Every boundary has exactly one name, so two squares can never each
+// build their own copy of the wall between them.
+const SIDES = {
+  n: { dx: 0, dz: -0.5, yaw: 0,           cells: [[0, 0], [0, -1]] },
+  w: { dx: -0.5, dz: 0, yaw: Math.PI / 2, cells: [[0, 0], [-1, 0]] },
 };
 
-// yaw turns the model's long axis (X) onto the axis the arm runs along.
-const DIRS = [
-  { key: 'n', dx: 0, dz: -1, yaw: Math.PI / 2 },
-  { key: 's', dx: 0, dz: 1, yaw: Math.PI / 2 },
-  { key: 'w', dx: -1, dz: 0, yaw: 0 },
-  { key: 'e', dx: 1, dz: 0, yaw: 0 },
-];
+const NEIGHBOURS = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 
-/** Sides of this cell where the wall line carries on into another wall or door. */
-function wallLinks(gx, gz) {
-  const links = [];
-  for (const d of DIRS) {
-    const c = state.base[cellKey(gx + d.dx, gz + d.dz)];
-    if (c && (c.build === 'wall' || c.build === 'door')) links.push(d);
-  }
-  return links;
+export const cellKey = (layer, gx, gz) => `${layer}:${gx},${gz}`;
+export const wallKey = (gx, gz, side) => `wall:${gx},${gz},${side}`;
+
+export const worldToCell = (x, z) => [Math.round(x / CELL), Math.round(z / CELL)];
+export const cellToWorld = (gx, gz) => new THREE.Vector3(gx * CELL, 0, gz * CELL);
+export const inPlot = (gx, gz) => Math.abs(gx) <= PLOT && Math.abs(gz) <= PLOT;
+
+/** Splits a socket key back into its parts. */
+export function parseKey(key) {
+  const [layer, rest] = key.split(':');
+  const bits = rest.split(',');
+  return {
+    layer, gx: +bits[0], gz: +bits[1],
+    side: bits[2] ?? null,
+    socket: LAYERS[layer].socket,
+  };
 }
 
-/**
- * A wall built out of half-segments, one running from the cell centre to each
- * side that continues into another wall.
- *
- * A full-cell wall can only face one way, so a corner left a gap: the two lines
- * meeting there are a cell apart, and neither piece reaches the other. Half
- * segments each stop exactly on the cell edge, which is where the neighbour
- * starts — straights, corners, tees and crossings all close up with no gap and
- * no overlap, and the wall orients itself from its neighbours.
- */
-function buildWallSegments(spec, links) {
-  const g = new THREE.Group();
-  for (const d of links) {
-    // Prefer a purpose-built half piece; fall back to squeezing a full one.
-    const model = getModel(spec.halfKey ?? spec.key);
-    if (!model) continue;
-    if (!spec.asBuilt) fitHeight(model, spec.height);
-    const bounds = new THREE.Box3().setFromObject(model);
-    const size = bounds.getSize(new THREE.Vector3());
-    if (!spec.halfKey) {
-      const centre = bounds.getCenter(new THREE.Vector3());
-      model.position.x -= centre.x;
-      model.position.z -= centre.z;
-      // Squeeze the span to half a cell, then push it out to fill that half.
-      if (size.x > 0.001) model.scale.x *= (CELL / 2) / size.x;
-    }
-    model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-
-    const arm = new THREE.Group();
-    arm.add(model);
-    arm.position.set(d.dx * CELL / 4, 0, d.dz * CELL / 4);
-    arm.rotation.y = d.yaw;
-    g.add(arm);
-  }
-  return g;
-}
-
-function buildPiece(itemId, links = null) {
-  const spec = PIECE_MODELS[itemId];
-  // Walls knit themselves into their neighbours; everything else is a whole piece.
-  if (spec && ITEMS[itemId]?.build === 'wall' && links?.length) {
-    return buildWallSegments(spec, links);
-  }
-  const model = spec && getModel(spec.key);
-  if (model) {
-    const g = new THREE.Group();
-    // Generated timber already measures correctly; rescaling it would undo the
-    // board thicknesses and nail sizes it was built with.
-    if (!spec.asBuilt) fitHeight(model, spec.height);
-    // Floors tile edge-to-edge; everything else keeps its natural footprint.
-    if (spec.fill) {
-      const box = new THREE.Box3().setFromObject(model);
-      const size = new THREE.Vector3();
-      box.getSize(size);
-      const w = Math.max(size.x, size.z);
-      // Footprint only. The kit's floor panel is nearly as tall as it is wide, so
-      // scaling uniformly to fill a 2m cell dragged the height up with it and
-      // turned the floorboards into a 2.2m plinth.
-      if (w > 0.001) {
-        model.scale.x *= CELL / w;
-        model.scale.z *= CELL / w;
-      }
-      model.position.y = 0;
-    }
-    // Centre the footprint on the cell. Kit models don't all have their origin in
-    // the middle, and an off-centre origin swings the piece sideways the moment
-    // it's rotated — two walls turned the same way end up at different distances
-    // from the room they're supposed to enclose. Generated timber is already
-    // built around its own centre.
-    if (!spec.asBuilt) {
-      const bounds = new THREE.Box3().setFromObject(model);
-      const centre = bounds.getCenter(new THREE.Vector3());
-      model.position.x -= centre.x;
-      model.position.z -= centre.z;
-    }
-    model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-    g.add(model);
-    if (itemId === 'campfire') {
-      const light = new THREE.PointLight(0xff9040, 7, 10, 2);
-      light.position.y = 1.0;
-      g.add(light);
-      const flame = new THREE.Mesh(
-        new THREE.ConeGeometry(0.24, 0.6, 5),
-        new THREE.MeshStandardMaterial({ color: 0xff8a3a, emissive: 0xff6a1a, emissiveIntensity: 2, flatShading: true }));
-      flame.position.y = 0.5;
-      g.add(flame);
-      g.userData.flame = flame;
-    }
-    return g;
-  }
-  return buildPiecePrimitive(itemId);
-}
-
-function buildPiecePrimitive(itemId) {
-  const def = ITEMS[itemId];
-  const g = new THREE.Group();
-
-  switch (def.build) {
-    case 'floor': {
-      const f = new THREE.Mesh(new THREE.BoxGeometry(CELL, 0.12, CELL), mat(0x8a6a42));
-      f.position.y = 0.06;
-      g.add(f);
-      for (let i = 0; i < 3; i++) {
-        const plank = new THREE.Mesh(new THREE.BoxGeometry(CELL * 0.96, 0.02, 0.06), mat(0x6f5334));
-        plank.position.set(0, 0.13, -0.6 + i * 0.6);
-        g.add(plank);
-      }
-      break;
-    }
-    case 'wall': {
-      const stone = itemId === 'wall_stone';
-      const w = new THREE.Mesh(
-        new THREE.BoxGeometry(CELL, stone ? 2.6 : 2.4, stone ? 0.42 : 0.3),
-        mat(stone ? 0x8b8b86 : 0x8a6a42));
-      w.position.y = (stone ? 2.6 : 2.4) / 2;
-      g.add(w);
-      if (!stone) {
-        for (let i = 0; i < 3; i++) {
-          const beam = new THREE.Mesh(new THREE.BoxGeometry(CELL * 0.95, 0.1, 0.36), mat(0x6f5334));
-          beam.position.set(0, 0.45 + i * 0.85, 0);
-          g.add(beam);
-        }
-      }
-      break;
-    }
-    case 'door': {
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(CELL, 2.4, 0.22), mat(0x6f5334));
-      frame.position.y = 1.2;
-      g.add(frame);
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(CELL * 0.66, 2.0, 0.3), mat(0xa07b4a));
-      panel.position.y = 1.0;
-      g.add(panel);
-      g.userData.panel = panel;
-      break;
-    }
-    case 'storage': {
-      const box = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.9, 0.9), mat(0x7d5f3c));
-      box.position.y = 0.45;
-      g.add(box);
-      const lid = new THREE.Mesh(new THREE.BoxGeometry(1.26, 0.14, 0.96), mat(0x5f4830));
-      lid.position.y = 0.95;
-      g.add(lid);
-      break;
-    }
-    case 'garden': {
-      const soil = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.32, 1.7), mat(0x4a3a2a));
-      soil.position.y = 0.16;
-      g.add(soil);
-      for (let i = 0; i < 4; i++) {
-        const sprout = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.4, 4), mat(0x6f9b4a));
-        sprout.position.set(-0.45 + (i % 2) * 0.9, 0.5, -0.45 + Math.floor(i / 2) * 0.9);
-        g.add(sprout);
-      }
-      break;
-    }
-    case 'station': {
-      if (def.station === 'campfire') {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.16, 5, 9), mat(0x6b6f73));
-        ring.rotation.x = Math.PI / 2;
-        ring.position.y = 0.16;
-        g.add(ring);
-        for (let i = 0; i < 4; i++) {
-          const log = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.8, 5), mat(0x4a3728));
-          log.rotation.set(Math.PI / 2.4, (i / 4) * Math.PI * 2, 0);
-          log.position.y = 0.25;
-          g.add(log);
-        }
-        const flame = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.7, 5),
-          mat(0xff8a3a, { emissive: 0xff6a1a, emissiveIntensity: 1.6 }));
-        flame.position.y = 0.62;
-        g.add(flame);
-        g.userData.flame = flame;
-        const light = new THREE.PointLight(0xff9040, 6, 9, 2);
-        light.position.y = 1.0;
-        g.add(light);
-      } else if (def.station === 'workbench') {
-        const top = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.16, 0.9), mat(0x8a6a42));
-        top.position.y = 0.95;
-        g.add(top);
-        for (const [x, z] of [[-0.7, -0.32], [0.7, -0.32], [-0.7, 0.32], [0.7, 0.32]]) {
-          const leg = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.9, 0.14), mat(0x6f5334));
-          leg.position.set(x, 0.45, z);
-          g.add(leg);
-        }
-        const vice = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.24, 0.24), mat(0x6b6f73));
-        vice.position.set(0.6, 1.15, 0);
-        g.add(vice);
-      } else {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.85, 1.5, 7), mat(0x6b6560));
-        body.position.y = 0.75;
-        g.add(body);
-        const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.7, 6), mat(0x565049));
-        chimney.position.y = 1.75;
-        g.add(chimney);
-        const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 0.2),
-          mat(0xff7a2a, { emissive: 0xff5a10, emissiveIntensity: 1.4 }));
-        mouth.position.set(0, 0.6, 0.78);
-        g.add(mouth);
-      }
-      break;
-    }
-  }
-
-  g.traverse((o) => { o.castShadow = true; o.receiveShadow = true; });
-  return g;
-}
-
-/**
- * Stamps the starter shelter into an empty plot. Anything already built is left
- * untouched, so this is safe to call on every boot — including for saves made
- * before the shelter existed.
- */
-export function ensureStarterBase() {
-  if (Object.keys(state.base).length > 0) return false;
-  for (const piece of STARTER_BASE) {
-    const def = ITEMS[piece.item];
-    state.base[cellKey(piece.gx, piece.gz)] = {
-      item: piece.item,
-      build: def.build,
-      hp: def.hp ?? 100,
-      rot: piece.rot ?? 0,
+/** Where a socket sits in the world, and which way its piece faces. */
+export function socketTransform(t) {
+  const y = LAYERS[t.layer].y;
+  if (t.socket === 'edge') {
+    const s = SIDES[t.side];
+    return {
+      pos: new THREE.Vector3((t.gx + s.dx) * CELL, y, (t.gz + s.dz) * CELL),
+      yaw: s.yaw,
     };
   }
-  return true;
+  return { pos: new THREE.Vector3(t.gx * CELL, y, t.gz * CELL), yaw: 0 };
 }
+
+export const keyOf = (t) =>
+  (t.socket === 'edge' ? wallKey(t.gx, t.gz, t.side) : cellKey(t.layer, t.gx, t.gz));
+
+/** The four boundaries of a cell, as socket descriptors. */
+const cellEdges = (gx, gz) => [
+  { layer: 'wall', socket: 'edge', gx, gz, side: 'n' },
+  { layer: 'wall', socket: 'edge', gx, gz: gz + 1, side: 'n' },
+  { layer: 'wall', socket: 'edge', gx, gz, side: 'w' },
+  { layer: 'wall', socket: 'edge', gx: gx + 1, gz, side: 'w' },
+];
+
+/** Stable per-socket variant pick, so a wall keeps its board pattern on reload. */
+function variantFor(key, models) {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) & 0x7fffffff;
+  return models[h % models.length];
+}
+
+// ---------------------------------------------------------------- placement rules
+
+const has = (key) => !!state.base[key];
+
+/**
+ * Is there something for this blueprint to stand on?
+ *
+ * One rule per layer, and the reasons read back to the player as written. A new
+ * buildable picks a layer in the catalogue instead of teaching the base about
+ * itself.
+ */
+function canSupport(bp, t) {
+  switch (bp.layer) {
+    case 'foundation':
+      return true;
+
+    case 'floor':
+      return has(cellKey('foundation', t.gx, t.gz)) ? true : 'Needs a foundation under it';
+
+    case 'wall': {
+      if (bp.freestanding) return true;
+      const ok = SIDES[t.side].cells
+        .some(([dx, dz]) => has(cellKey('floor', t.gx + dx, t.gz + dz)));
+      return ok ? true : 'Needs a floor beside it';
+    }
+
+    case 'roof': {
+      const walled = cellEdges(t.gx, t.gz).some((e) => has(keyOf(e)));
+      if (walled) return true;
+      // Or carry on from a roof that is already up, so a room wider than one
+      // cell can be covered without walling every square inside it.
+      const joins = NEIGHBOURS.some(([dx, dz]) => has(cellKey('roof', t.gx + dx, t.gz + dz)));
+      return joins ? true : 'Needs a wall to sit on';
+    }
+
+    case 'object':
+      return has(cellKey('floor', t.gx, t.gz)) ? true : 'Needs a floor under it';
+
+    default:
+      return true;
+  }
+}
+
+// ---------------------------------------------------------------- piece meshes
+
+/**
+ * Builds one piece's mesh.
+ *
+ * Models come out of the generators at true size and already centred on their
+ * own socket, so nothing here rescales or re-centres them — a 25mm board stays
+ * 25mm whichever socket it lands in.
+ */
+function buildPiece(id, key = id) {
+  const bp = blueprint(id);
+  const g = new THREE.Group();
+  if (!bp) return g;
+
+  const model = getModel(variantFor(key, bp.models));
+  if (model) {
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      if (!o.userData.noReceiveShadow) o.receiveShadow = true;
+    });
+    // Looked up by name rather than read out of userData: getModel returns a
+    // clone, and cloning puts userData through JSON, so any object reference in
+    // there arrives as a plain copy with no live rotation to drive.
+    g.userData.leaf = model.getObjectByName('door_leaf') ?? null;
+    g.userData.flame = model.getObjectByName('flame') ?? null;
+    g.add(model);
+  }
+
+  // Roofs have to be able to disappear when you walk under them, and materials
+  // are shared between every piece that uses them — so a roof gets its own.
+  if (bp.layer === 'roof') {
+    g.userData.fade = [];
+    g.traverse((o) => {
+      if (!o.isMesh) return;
+      o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone();
+      for (const m of [].concat(o.material)) {
+        m.transparent = true;
+        g.userData.fade.push(m);
+      }
+    });
+  }
+  return g;
+}
+
+// ---------------------------------------------------------------- the base
 
 export class Base {
   constructor(scene) {
@@ -310,6 +176,9 @@ export class Base {
     this.root = new THREE.Group();
     this.meshes = new Map();
     scene.add(this.root);
+
+    /** Set by the game: world positions already taken by trees, rocks, wrecks. */
+    this.obstructed = null;
 
     this.gridHelper = this.makeGrid();
     this.gridHelper.visible = false;
@@ -319,16 +188,17 @@ export class Base {
     this.ghost.visible = false;
     scene.add(this.ghost);
     this.ghostId = null;
+    this.roofFade = 1;
 
     this.rebuild();
   }
 
   makeGrid() {
     const g = new THREE.Group();
-    const size = GRID * 2 * CELL + CELL;
-    const grid = new THREE.GridHelper(size, GRID * 2 + 1, 0x9fd8a0, 0x5d7a5e);
-    grid.position.y = 0.03;
-    grid.material.opacity = 0.35;
+    const size = PLOT * 2 * CELL + CELL;
+    const grid = new THREE.GridHelper(size, PLOT * 2 + 1, 0x9fd8a0, 0x486b4c);
+    grid.position.y = 0.02;
+    grid.material.opacity = 0.22;
     grid.material.transparent = true;
     g.add(grid);
     return g;
@@ -337,15 +207,10 @@ export class Base {
   rebuild() {
     for (const m of this.meshes.values()) this.root.remove(m);
     this.meshes.clear();
-    for (const key of Object.keys(state.base)) {
-      const [gx, gz] = key.split(',').map(Number);
-      this.refresh(gx, gz);
-    }
+    for (const key of Object.keys(state.base)) this.refresh(key);
   }
 
-  /** (Re)builds one cell's mesh from its current neighbours. */
-  refresh(gx, gz) {
-    const key = cellKey(gx, gz);
+  refresh(key) {
     const old = this.meshes.get(key);
     if (old) {
       this.root.remove(old);
@@ -354,143 +219,203 @@ export class Base {
     const cell = state.base[key];
     if (!cell) return;
 
-    const joins = cell.build === 'wall' || cell.build === 'door' ? wallLinks(gx, gz) : null;
-    const mesh = buildPiece(cell.item, joins);
-    mesh.position.copy(cellToWorld(gx, gz));
-    if (cell.build === 'wall' && joins?.length) {
-      mesh.rotation.y = 0;                     // the segments carry their own aim
-    } else if (cell.build === 'door' && joins?.length) {
-      // Sit square in the wall line the door interrupts.
-      mesh.rotation.y = joins.some((d) => d.dz !== 0) ? Math.PI / 2 : 0;
-    } else {
-      mesh.rotation.y = cell.rot ?? 0;
-    }
+    const t = parseKey(key);
+    const mesh = buildPiece(cell.item, key);
+    const { pos, yaw } = socketTransform(t);
+    mesh.position.copy(pos);
+    mesh.rotation.y = yaw + (cell.rot ?? 0) * (Math.PI / 2);
+    mesh.userData.socket = t;
     this.root.add(mesh);
     this.meshes.set(key, mesh);
   }
 
-  /** A piece changing shape changes its neighbours' shapes too. */
-  refreshAround(gx, gz) {
-    this.refresh(gx, gz);
-    for (const d of DIRS) this.refresh(gx + d.dx, gz + d.dz);
+  get(key) { return state.base[key] ?? null; }
+
+  // ---- targeting ------------------------------------------------------
+
+  /**
+   * Which socket a click at this point should fill.
+   *
+   * The cursor picks the nearest socket, but a blocked one steps aside for the
+   * next nearest that would actually work — so dragging a wall along a deck
+   * lands each piece in the next free slot instead of stalling on the one you
+   * already built.
+   */
+  targetFor(id, point) {
+    const bp = blueprint(id);
+    if (!bp) return null;
+    const candidates = socketOf(bp) === 'edge'
+      ? this.edgeCandidates(point)
+      : this.cellCandidates(bp, point);
+
+    let fallback = null;
+    for (const t of candidates) {
+      const reason = this.checkPlace(id, t);
+      if (reason === true) return { ...t, ok: true, reason: null };
+      fallback = fallback ?? { ...t, ok: false, reason };
+    }
+    return fallback;
   }
 
-  get(gx, gz) { return state.base[cellKey(gx, gz)] ?? null; }
+  /** The cell under the point, then its neighbours, nearest first. */
+  cellCandidates(bp, point) {
+    const [gx, gz] = worldToCell(point.x, point.z);
+    const mk = (x, z) => ({ layer: bp.layer, socket: 'cell', gx: x, gz: z });
+    const ranked = NEIGHBOURS
+      .map(([dx, dz]) => mk(gx + dx, gz + dz))
+      .sort((a, b) => this.distTo(a, point) - this.distTo(b, point));
+    return [mk(gx, gz), ...ranked];
+  }
 
-  canPlace(gx, gz, itemId) {
-    if (!inGrid(gx, gz)) return 'Outside the plot';
-    const def = ITEMS[itemId];
-    const existing = this.get(gx, gz);
-    if (!existing) return def.build === 'floor' ? true : true;
-    if (existing.item === itemId) return 'Already here';
-    // A floor can sit under nothing else; everything else replaces.
+  /** The four boundaries of the cell under the point, nearest first. */
+  edgeCandidates(point) {
+    const [gx, gz] = worldToCell(point.x, point.z);
+    return cellEdges(gx, gz).sort((a, b) => this.distTo(a, point) - this.distTo(b, point));
+  }
+
+  distTo(t, point) {
+    const { pos } = socketTransform(t);
+    return (pos.x - point.x) ** 2 + (pos.z - point.z) ** 2;
+  }
+
+  /** true, or the reason this blueprint can't go in this socket. */
+  checkPlace(id, t) {
+    const bp = blueprint(id);
+    if (!inPlot(t.gx, t.gz)) return 'Outside your plot';
+    if (state.base[keyOf(t)]) return 'Something is already here';
+
+    const support = canSupport(bp, t);
+    if (support !== true) return support;
+
+    if (this.obstructed && t.socket !== 'edge') {
+      const { pos } = socketTransform(t);
+      if (this.obstructed(pos.x, pos.z)) return 'Something is in the way';
+    }
     return true;
   }
 
-  place(gx, gz, itemId, rot = 0) {
-    const def = ITEMS[itemId];
-    const cell = {
-      item: itemId,
-      build: def.build,
-      hp: def.hp ?? 100,
-      rot,
-    };
-    if (def.build === 'station') cell.station = def.station;
-    if (def.build === 'storage') cell.contents = makeSlots(def.capacity ?? 12);
+  // ---- building and taking down ---------------------------------------
 
-    const key = cellKey(gx, gz);
-    const old = state.base[key];
+  place(t, id) {
+    const bp = blueprint(id);
+    const key = keyOf(t);
+    const cell = { item: id, hp: bp.hp ?? 100, rot: t.rot ?? 0 };
+    if (bp.station) cell.station = bp.station;
+    if (bp.capacity) cell.contents = makeSlots(bp.capacity);
+
     state.base[key] = cell;
-    this.refreshAround(gx, gz);
-    return old ?? null;
+    this.refresh(key);
+    return key;
   }
 
-  remove(gx, gz) {
-    const key = cellKey(gx, gz);
+  remove(key) {
     const cell = state.base[key];
     if (!cell) return null;
     delete state.base[key];
-    this.refreshAround(gx, gz);
+    this.refresh(key);
+    // Pulling a floor out from under a wall leaves the wall unsupported, but
+    // knocking it down too would cascade through a whole building on one click.
+    // The wall stays; it just can't be rebuilt there until the floor is back.
     return cell;
   }
 
-  showGhost(gx, gz, itemId, valid, rot = 0) {
-    if (!itemId) { this.ghost.visible = false; return; }
-    if (itemId !== this.ghostId) {
-      this.ghost.clear();
-      const g = buildPiece(itemId);
-      g.traverse((o) => {
-        if (!o.material) return;
-        o.material = o.material.clone();
-        o.material.transparent = true;
-        o.material.opacity = 0.55;
-        o.castShadow = false;
-      });
-      this.ghost.add(g);
-      this.ghostId = itemId;
+  /** The piece nearest this point, for the take-it-down button. */
+  nearestSocket(point, range = 2.2) {
+    let best = null;
+    let bestD = range * range;
+    for (const key of Object.keys(state.base)) {
+      const { pos } = socketTransform(parseKey(key));
+      const d = (pos.x - point.x) ** 2 + (pos.z - point.z) ** 2;
+      if (d < bestD) { bestD = d; best = key; }
     }
-    this.ghost.visible = true;
-    this.ghost.position.copy(cellToWorld(gx, gz));
-    this.ghost.rotation.y = rot;
-    this.ghost.traverse((o) => {
-      if (o.material && o.material.color) {
-        o.material.emissive?.setHex(valid ? 0x224422 : 0x552222);
-      }
-    });
+    return best;
   }
 
-  hideGhost() { this.ghost.visible = false; }
-  setBuildMode(on) { this.gridHelper.visible = on; if (!on) this.hideGhost(); }
+  // ---- what the rest of the game asks ---------------------------------
 
   /**
-   * Solid pieces the player and zombies bump into.
+   * Solid pieces to bump into.
    *
-   * Doorways are walk-through — a door you can't pass is just an expensive wall,
-   * and with whole-cell pieces it would seal the room it's meant to open.
-   * Walls use 0.8 rather than a full half-cell: the collider is a circle around
-   * the cell centre, so a full 1.0 reaches right across the neighbouring cell and
-   * makes a 2x2m room too tight to stand in. At 0.8 the gap between two adjacent
-   * walls is 0.4m — still far too narrow for a 0.84m-wide body to slip through.
+   * A wall is a 2m line, not a blob in the middle of a square, so it gets a row
+   * of small circles strung along its length.
+   *
+   * The circles are deliberately tiny. A circle keeps the player its own radius
+   * plus theirs away, so a fat one would hold you the better part of a metre off
+   * your own wall; at 0.12 you stop about half a metre from it, which reads as
+   * standing against the boards. Five of them at 0.4m spacing is close enough
+   * that nobody fits between two — a 0.42m body would have to pass within 0.2m
+   * of one — and the end circles sit near enough to the cell corner that the next
+   * wall's end circle closes the join.
    */
   colliders() {
     const out = [];
     for (const [key, cell] of Object.entries(state.base)) {
-      if (cell.build === 'floor' || cell.build === 'door') continue;
-      const [gx, gz] = key.split(',').map(Number);
-      out.push({
-        position: cellToWorld(gx, gz),
-        radius: cell.build === 'wall' ? 0.8 : 0.75,
-        active: true,
-        entity: null,
-      });
+      const bp = blueprint(cell.item);
+      if (!bp || !bp.solid) continue;
+      const t = parseKey(key);
+      const { pos, yaw } = socketTransform(t);
+      if (t.socket === 'edge') {
+        const ax = Math.cos(yaw);
+        const az = -Math.sin(yaw);
+        for (const s of [-0.8, -0.4, 0, 0.4, 0.8]) {
+          out.push({
+            position: new THREE.Vector3(pos.x + ax * s, 0, pos.z + az * s),
+            radius: bp.solid, active: true, entity: null,
+          });
+        }
+      } else {
+        out.push({ position: new THREE.Vector3(pos.x, 0, pos.z), radius: bp.solid, active: true, entity: null });
+      }
     }
     return out;
   }
 
-  /**
-   * Is this world position inside a built cell? Used to keep grass from growing
-   * up through floors and walls.
-   *
-   * Slightly inset from the cell edge so blades right at a floor's rim aren't
-   * culled — they read as grass creeping up against the boards.
-   */
-  occupiedAt(x, z, inset = 0.12) {
-    const [gx, gz] = worldToCell(x, z);
-    if (!state.base[cellKey(gx, gz)]) return false;
-    const centre = cellToWorld(gx, gz);
-    const half = CELL / 2 - inset;
-    return Math.abs(x - centre.x) <= half && Math.abs(z - centre.z) <= half;
+  /** Keeps grass from growing up through what you've built. */
+  occupiedAt(x, z, inset = 0.1) {
+    for (const [key, cell] of Object.entries(state.base)) {
+      const bp = blueprint(cell.item);
+      if (!bp?.clears) continue;
+      const t = parseKey(key);
+      const { pos, yaw } = socketTransform(t);
+
+      if (t.socket === 'edge') {
+        // A band along the wall line rather than a circle, so the grass stops in
+        // a straight edge against the boards.
+        const dx = x - pos.x;
+        const dz = z - pos.z;
+        const along = Math.abs(Math.cos(yaw) * dx - Math.sin(yaw) * dz);
+        const across = Math.abs(Math.sin(yaw) * dx + Math.cos(yaw) * dz);
+        if (along <= CELL / 2 && across <= bp.clears / 2) return true;
+      } else if (bp.layer === 'foundation' || bp.layer === 'floor') {
+        const half = CELL / 2 - inset;
+        if (Math.abs(x - pos.x) <= half && Math.abs(z - pos.z) <= half) return true;
+      } else if ((x - pos.x) ** 2 + (z - pos.z) ** 2 <= bp.clears ** 2) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  /** Nearest interactable base cell (storage/station) within range. */
+  /** How high the ground is here — you step up onto your own deck. */
+  surfaceY(x, z) {
+    const [gx, gz] = worldToCell(x, z);
+    const c = cellToWorld(gx, gz);
+    const half = CELL / 2;
+    if (Math.abs(x - c.x) > half || Math.abs(z - c.z) > half) return 0;
+    if (has(cellKey('floor', gx, gz))) return DECK_TOP;
+    if (has(cellKey('foundation', gx, gz))) return FOUND_TOP;
+    return 0;
+  }
+
+  /** Nearest thing worth pressing E on. */
   nearest(pos, range = 2.6) {
     let best = null;
     let bestD = range;
     for (const [key, cell] of Object.entries(state.base)) {
-      if (cell.build !== 'storage' && cell.build !== 'station' && cell.build !== 'garden') continue;
-      const [gx, gz] = key.split(',').map(Number);
-      const d = cellToWorld(gx, gz).distanceTo(pos);
-      if (d < bestD) { bestD = d; best = { key, cell, gx, gz }; }
+      const bp = blueprint(cell.item);
+      if (!bp || (!bp.capacity && !bp.station)) continue;
+      const d = socketTransform(parseKey(key)).pos.distanceTo(pos);
+      if (d < bestD) { bestD = d; best = { key, cell, bp }; }
     }
     return best;
   }
@@ -498,20 +423,98 @@ export class Base {
   /** Which crafting station the player is standing next to, if any. */
   stationAt(pos, range = 3.2) {
     for (const [key, cell] of Object.entries(state.base)) {
-      if (cell.build !== 'station') continue;
-      const [gx, gz] = key.split(',').map(Number);
-      if (cellToWorld(gx, gz).distanceTo(pos) <= range) return cell.station;
+      if (!cell.station) continue;
+      if (socketTransform(parseKey(key)).pos.distanceTo(pos) <= range) return cell.station;
     }
     return null;
   }
 
-  animate(t) {
+  // ---- ghost ----------------------------------------------------------
+
+  showGhost(target, id) {
+    if (!target || !id) { this.hideGhost(); return; }
+    if (id !== this.ghostId) {
+      this.ghost.clear();
+      const g = buildPiece(id);
+      g.traverse((o) => {
+        if (!o.isMesh) return;
+        o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone();
+        for (const m of [].concat(o.material)) {
+          m.transparent = true;
+          m.opacity = 0.5;
+          m.depthWrite = false;
+        }
+        o.castShadow = false;
+        o.receiveShadow = false;
+      });
+      this.ghost.add(g);
+      this.ghostId = id;
+    }
+    const { pos, yaw } = socketTransform(target);
+    this.ghost.visible = true;
+    this.ghost.position.copy(pos);
+    this.ghost.rotation.y = yaw + (target.rot ?? 0) * (Math.PI / 2);
+
+    const glow = target.ok ? 0x2f6b2a : 0x6b2020;
+    this.ghost.traverse((o) => {
+      for (const m of [].concat(o.material ?? [])) m.emissive?.setHex(glow);
+    });
+  }
+
+  hideGhost() { this.ghost.visible = false; }
+
+  setBuildMode(on) {
+    this.gridHelper.visible = on;
+    if (!on) this.hideGhost();
+  }
+
+  // ---- per-frame ------------------------------------------------------
+
+  animate(t, playerPos, dt = 1 / 60) {
+    // Exponential, not a fixed step per frame: a fixed step makes the door open
+    // twice as fast at 120fps as at 60, and crawl on a slow machine.
+    const k = 1 - Math.exp(-dt * 9);
+
+    // A roof you can't see under is a roof you can't play under. Fade the lot
+    // out the moment the player steps beneath one, and back in when they leave.
+    const want = playerPos && this.isSheltered(playerPos) ? 0.12 : 1;
+    if (Math.abs(this.roofFade - want) > 0.002) {
+      this.roofFade += (want - this.roofFade) * k;
+      const solid = this.roofFade > 0.5;
+      for (const mesh of this.meshes.values()) {
+        if (!mesh.userData.fade) continue;
+        for (const m of mesh.userData.fade) m.opacity = this.roofFade;
+        // A faded roof that still casts leaves the room pitch dark and you
+        // cannot see your own character. Once it's see-through, it stops
+        // shading too.
+        mesh.traverse((o) => { if (o.isMesh) o.castShadow = solid; });
+      }
+    }
+
     for (const mesh of this.meshes.values()) {
       const flame = mesh.userData.flame;
       if (flame) {
         flame.scale.setScalar(0.85 + Math.sin(t * 9 + mesh.position.x) * 0.15);
         flame.rotation.y = t * 2;
       }
+      const leaf = mesh.userData.leaf;
+      if (leaf && playerPos) this.swingDoor(mesh, leaf, playerPos, k);
     }
+  }
+
+  isSheltered(pos) {
+    const [gx, gz] = worldToCell(pos.x, pos.z);
+    return has(cellKey('roof', gx, gz));
+  }
+
+  /** Doors open away from whoever walks up to them. */
+  swingDoor(mesh, leaf, playerPos, k) {
+    const dx = playerPos.x - mesh.position.x;
+    const dz = playerPos.z - mesh.position.z;
+    const near = dx * dx + dz * dz < 2.6 * 2.6;
+    // Which side of the wall the player is standing on decides which way it goes.
+    const facing = Math.sin(mesh.rotation.y) * dx + Math.cos(mesh.rotation.y) * dz;
+    const want = near ? (facing >= 0 ? -1 : 1) * 1.5 : 0;
+    leaf.rotation.y += (want - leaf.rotation.y) * k;
   }
 }

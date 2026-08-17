@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { getModel, getAnimations, fitHeight, facingOffset, uprightSkeleton } from '../world/models.js';
 import {
   findBones, cacheRest, buildSwingClip, buildPunchClip, buildToolSwingClip,
-  buildShamblePose, buildDeathClip,
+  buildShamblePose, buildDeathClip, buildAimPose,
 } from './anim.js';
 
 // Wraps a skinned Mixamo character.
@@ -110,6 +110,24 @@ export class CharacterRig {
     this.poseAction.play();
   }
 
+  /**
+   * Brings a long gun up to the shoulder, or lets it back down.
+   *
+   * Eased rather than snapped: switching from an axe to a rifle should look like
+   * the character raising it, not like the arms teleporting.
+   */
+  setAiming(on) {
+    if (!this.ok) return;
+    if (!this.aimAction) {
+      this.aimAction = this.makeAdditive(buildAimPose(this.bones));
+      this.aimAction.setLoop(THREE.LoopRepeat, Infinity);
+      this.aimAction.clampWhenFinished = true;
+      this.aimAction.setEffectiveWeight(0);
+      this.aimAction.play();
+    }
+    this.aimWanted = on ? 1 : 0;
+  }
+
   applyTint(color, strength = 0.55) {
     const c = new THREE.Color(color);
     this.model.traverse((o) => {
@@ -206,5 +224,16 @@ export class CharacterRig {
     this.setBase('idle');
   }
 
-  update(dt) { this.mixer?.update(dt); }
+  update(dt) {
+    // Ease the aim layer towards where it should be, so raising and lowering a
+    // gun is a movement rather than a cut.
+    if (this.aimAction) {
+      const w = this.aimAction.getEffectiveWeight();
+      const want = this.aimWanted ?? 0;
+      if (Math.abs(w - want) > 0.002) {
+        this.aimAction.setEffectiveWeight(w + (want - w) * Math.min(1, dt * 8));
+      }
+    }
+    this.mixer?.update(dt);
+  }
 }

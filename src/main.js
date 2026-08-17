@@ -264,7 +264,12 @@ function nearestHarvestable(range = 6) {
 function attack() {
   // Working a resource takes priority: aim at a tree and the swing becomes a
   // chop, complete with walking into range first.
-  const node = nearestHarvestable();
+  //
+  // Not for a gun, though. Harvesting is something you do with a tool in your
+  // hands, and diverting the trigger into it meant that standing anywhere near a
+  // tree — which is most of the map — turned every shot into "you need an axe
+  // for this" and the weapon simply never fired.
+  const node = player.weapon.ranged ? null : nearestHarvestable();
   if (node) {
     const refused = harvester.begin(node, player.weapon);
     if (refused) toast(refused, 'bad');
@@ -303,21 +308,42 @@ function fireRanged(w) {
   if (countItem(state.inv, w.ammo) < 1) { toast('Out of ammo', 'bad'); return; }
   removeItem(state.inv, w.ammo, 1);
 
-  const yaw = player.mesh.rotation.y + (rng() - 0.5) * w.spread * 2;
-  const dir = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
-  const origin = player.position.clone().setY(1.4);
+  // Shoot where you are looking, not where your feet are pointing.
+  //
+  // This used to fire along the body's yaw on a dead-level line, which was fine
+  // for a camera fixed overhead — there was nothing to aim at above or below
+  // you, and no way to express it. With a camera you can pitch, a shot that
+  // ignores pitch means the crosshair and the bullet disagree, and the gun feels
+  // broken however well it fires.
+  const close = viewName() !== 'overhead';
+  const dir = new THREE.Vector3();
+  if (close) camera.getWorldDirection(dir);
+  else dir.set(Math.sin(player.mesh.rotation.y), 0, Math.cos(player.mesh.rotation.y));
+
+  // Spread applied around the shot rather than to the yaw alone, so it scatters
+  // in a cone instead of only sideways.
+  dir.x += (rng() - 0.5) * w.spread * 2;
+  dir.y += (rng() - 0.5) * w.spread;
+  dir.z += (rng() - 0.5) * w.spread * 2;
+  dir.normalize();
+
+  const origin = close
+    ? camera.position.clone().addScaledVector(dir, 0.6)
+    : player.position.clone().setY(1.4);
 
   let hit = null;
   let hitDist = w.maxRange;
   const rel = new THREE.Vector3();
   for (const z of loc.zombies) {
     if (!z.alive) continue;
-    rel.subVectors(z.position, player.position);
-    rel.y = 0;
+    // Treat the target as an upright capsule about a metre tall, tested in three
+    // dimensions — a flat test cannot be hit from a raised camera.
+    rel.subVectors(z.position, origin);
+    rel.y += 1.0;
     const along = rel.dot(dir);
     if (along <= 0 || along > hitDist) continue;
-    const perp = Math.abs(rel.x * dir.z - rel.z * dir.x);
-    if (perp > z.radius + 0.25) continue;
+    const perp = rel.clone().addScaledVector(dir, -along).length();
+    if (perp > z.radius + 0.35) continue;
     hit = z;
     hitDist = along;
   }
@@ -330,7 +356,7 @@ function fireRanged(w) {
 
   if (hit) {
     const killed = hit.damage(w.dmg);
-    hit.position.addScaledVector(dir, 0.5);
+    hit.position.addScaledVector(dir.clone().setY(0).normalize(), 0.5);
     if (killed) onZombieKilled(hit);
   }
   wearWeapon();
@@ -941,6 +967,11 @@ function frame() {
     : target ? `<kbd>E</kbd> ${target.label}`
     : workable ? `<kbd>SPACE</kbd> ${workable.label}`
     : null;
+  // The crosshair is the promise that the middle of the screen is where the shot
+  // goes — so it only appears when that is actually true.
+  document.getElementById('crosshair').classList.toggle('on',
+    !paused && !buildMode() && viewName() !== 'overhead' && !!player.weapon.ranged);
+
   updateHud(loc.def, promptText, searching);
 
   saveTimer += dt;

@@ -339,3 +339,46 @@ export function buildDeathClip(bones) {
 
   return new THREE.AnimationClip('death', 1.25, tracks);
 }
+
+/**
+ * Shouldered: the pose for holding a long gun.
+ *
+ * Without it a rifle dangles from one hand exactly like an axe, because the rig
+ * only ever knew one way to carry something. A gun has to be brought up and
+ * held with both hands, and the whole reason to hold it that way is that you are
+ * pointing it at something.
+ *
+ * Built as a constant additive offset like the zombie's hunch, so the legs keep
+ * walking and running underneath it.
+ *
+ * On this skeleton the arm bones run down their own X, which makes X pure twist;
+ * the shoulder swings the arm forward around Y and the elbow bends around Y too,
+ * with the sign flipping between the left and right chains. Getting that wrong
+ * is what once produced a punch that went backwards.
+ */
+export function buildAimPose(bones) {
+  const t = [0, 1];
+  const tracks = [];
+  const hold = (bone, dx, dy, dz) => {
+    if (!bone) return;
+    tracks.push(quatTrack(bone, t, [poseQuat(bone, 0, 0, 0), poseQuat(bone, dx, dy, dz)]));
+  };
+
+  // Firing arm up and forward, elbow tucked in rather than winged out.
+  hold(bones.armR, -0.30, -1.05, 0);
+  hold(bones.foreR, 0, -1.15, 0);
+  // Support hand comes across the body to meet the fore-end.
+  hold(bones.armL, -0.20, 0.95, 0);
+  hold(bones.foreL, 0, 1.45, 0);
+  // Shoulders square up to what is being aimed at, and the head comes down to
+  // the sights instead of staying level.
+  hold(bones.spine1, 0.06, -0.16, 0);
+  hold(bones.neck, 0.10, 0, 0);
+  hold(bones.head, 0.06, 0, 0);
+
+  const clip = new THREE.AnimationClip('aim', 1, tracks);
+  const additive = THREE.AnimationUtils.makeClipAdditive(clip);
+  for (const tr of additive.tracks) tr.times = new Float32Array([0, 1e-4]);
+  additive.duration = 1e-4;
+  return additive;
+}

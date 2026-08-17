@@ -165,6 +165,16 @@
   .loc .cost { font-size: 10.5px; margin-bottom: 9px; }
   .loc .grave { font-size: 10px; color: #d2a545; margin-bottom: 8px; }
 
+  /* Crosshair. Only up when a gun is in hand and the camera is close enough for
+     the middle of the screen to mean anything. */
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
+               margin: -11px 0 0 -11px; display: none; opacity: .8; }
+  #crosshair.on { display: block; }
+  #crosshair::before, #crosshair::after { content: ''; position: absolute; background: #e8eef2;
+               box-shadow: 0 0 2px rgba(0,0,0,.9); }
+  #crosshair::before { left: 50%; top: 0; width: 1.5px; height: 100%; margin-left: -.75px; }
+  #crosshair::after  { top: 50%; left: 0; height: 1.5px; width: 100%; margin-top: -.75px; }
+
   /* build mode: the strip along the bottom while you're placing */
   #buildhint { position: absolute; bottom: 74px; left: 50%; transform: translateX(-50%);
                display: none; align-items: center; gap: 22px; background: rgba(0,0,0,.74);
@@ -294,6 +304,7 @@
     <kbd>M</kbd> map &middot; <kbd>B</kbd> build &middot; <kbd>V</kbd> view &middot; <kbd>P</kbd> graphics &middot; <kbd>ESC</kbd> close
   </div>
 
+  <div id="crosshair"></div>
   <div id="toasts"></div>
   <div id="buildwhy"></div>
   <div id="buildhint"></div>

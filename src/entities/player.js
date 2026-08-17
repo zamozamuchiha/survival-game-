@@ -153,11 +153,22 @@ export class Player {
     g.rotation.x = def.ranged ? -Math.PI / 2 : -0.45;
     g.traverse((o) => { o.castShadow = true; });
     this.heldSlot.add(g);
+    // A long gun gets carried at the shoulder; everything else hangs off the arm.
+    this.rig?.setAiming?.(!!def.ranged);
   }
 
   trySwing() {
     if (state.hp <= 0 || this.swingCd > 0 || this.busy > 0) return false;
     const w = this.weapon;
+
+    // Pulling a trigger is not swinging a bat. A gun costs no stamina and plays
+    // no swing — at an automatic's rate of fire the stamina cost alone would
+    // empty the bar in under three seconds and stop the weapon working.
+    if (w.ranged) {
+      this.swingCd = w.speed ?? 0.5;
+      return true;
+    }
+
     if (state.stamina < 6) return false;
     this.swingCd = w.speed ?? 0.5;
     this.swingTimer = Math.min(0.3, (w.speed ?? 0.5) * 0.55);

@@ -45,7 +45,7 @@ export function isComplete(mission, progress) {
 /**
  * Records something the player did.
  *
- * @param kind  'collect' | 'craft' | 'harvest' | 'kill' | 'build' | 'travel'
+ * @param kind  'collect' | 'craft' | 'harvest' | 'kill' | 'build' | 'store' | 'travel'
  * @param what  item id, node type, zombie type or location id
  * @param n     how many
  */

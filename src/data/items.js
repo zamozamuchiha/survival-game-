@@ -54,9 +54,13 @@ export const ITEMS = {
   machete:  { name: 'Machete',    icon: '🗡️', cat: 'weapon', stack: 1, weight: 1.6, dmg: 38, speed: 0.45, reach: 2.9, dur: 300 },
   pistol:   { name: 'Pistol',     icon: '🔫', cat: 'weapon', stack: 1, weight: 1.2, dmg: 44, speed: 0.42, dur: 220, ranged: true, ammo: 'ammo_9mm', spread: 0.055, maxRange: 34 },
   rifle:    { name: 'Hunting Rifle', icon: '🎯', cat: 'weapon', stack: 1, weight: 3.4, dmg: 92, speed: 1.15, dur: 260, ranged: true, ammo: 'ammo_rifle', spread: 0.018, maxRange: 60 },
+  // Automatic: far less damage per shot than the bolt gun and nothing like its
+  // accuracy, but it fires nine times in the same second and a half.
+  ak74:     { name: 'AK-74',        icon: '🔫', cat: 'weapon', stack: 1, weight: 3.3, dmg: 30, speed: 0.13, dur: 420, ranged: true, ammo: 'ammo_545', spread: 0.052, maxRange: 46 },
 
   ammo_9mm:   { name: '9mm Rounds',   icon: '🔸', cat: 'ammo', stack: 120, weight: 0.02 },
   ammo_rifle: { name: 'Rifle Rounds', icon: '🔹', cat: 'ammo', stack: 60,  weight: 0.04 },
+  ammo_545:   { name: '5.45x39 Rounds', icon: '🔻', cat: 'ammo', stack: 180, weight: 0.013 },
 
   // ---- armor ----------------------------------------------------------
   hat_cloth:     { name: 'Cloth Hood',     icon: '🧢', cat: 'armor', stack: 1, weight: 0.4, slot: 'head', armor: 0.06, dur: 120 },

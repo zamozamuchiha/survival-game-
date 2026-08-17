@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 
 // Short grass built from real blades.
 //
@@ -20,8 +21,11 @@ import * as THREE from 'three';
 // smaller than this leaves a visible ring of bare texture around the player.
 // Density per square metre drops as the patch grows — that trade is deliberate,
 // since a blade 20m away is a pixel wide and nobody counts them out there.
-const PATCH = 52;            // metres across the live field
-const CLUSTERS = 26000;      // cluster instances, split across the variants
+// Field size and density come from the graphics setting — grass is the single
+// biggest block of triangles in the main pass, so it is the first thing worth
+// turning down on a machine that cannot keep up.
+let PATCH = 52;              // metres across the live field
+let CLUSTERS = 26000;        // cluster instances, split across the variants
 const VARIANTS = 3;          // distinct cluster meshes, so the pattern doesn't repeat
 const BLADES_PER_CLUSTER = 7;
 // Two segments per blade rather than three. At 30cm tall the extra ring buys
@@ -126,6 +130,9 @@ function clusterGeometry(rng) {
 
 export class GrassField {
   constructor(scene, rng, radius, opts = {}) {
+    const q = quality();
+    PATCH = q.grassPatch;
+    CLUSTERS = q.grassClusters;
     this.radius = radius;
     this.centre = new THREE.Vector2(0, 0);
     this.time = 0;

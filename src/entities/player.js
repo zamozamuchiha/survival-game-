@@ -5,6 +5,9 @@ import { CharacterRig } from './character.js';
 import { getModel } from '../world/models.js';
 
 const WALK_SPEED = 5.3;
+// Between a walk and a sprint, and free: this is the pace you actually travel
+// at, so charging stamina for it would just mean never using it.
+const JOG_SPEED = 6.9;
 const SPRINT_SPEED = 8.8;
 const ACCEL = 44;
 const FRICTION = 15;
@@ -55,6 +58,10 @@ export class Player {
     this.wasDead = false;
     this.moveGoal = null;     // set by systems that walk the player somewhere
     this.faceGoal = null;     // set to lock facing while working
+    // Where the camera is looking, when the mouse is driving it. Movement
+    // becomes relative to this and the body turns to match — W walks the way you
+    // are looking rather than the way the world happens to be oriented.
+    this.lookYaw = null;
 
     this.mesh = new THREE.Group();
 
@@ -219,9 +226,16 @@ export class Player {
       const d = Math.hypot(dx, dz);
       if (d > 0.12) wish.set(dx / d, 0, dz / d);
     } else if (canMove && this.busy <= 0) {
-      wish.set(
-        (input.right ? 1 : 0) - (input.left ? 1 : 0), 0,
-        (input.back ? 1 : 0) - (input.forward ? 1 : 0));
+      const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      const ahead = (input.forward ? 1 : 0) - (input.back ? 1 : 0);
+      if (this.lookYaw !== null) {
+        // Rotate the stick into the camera's frame.
+        const s = Math.sin(this.lookYaw);
+        const c = Math.cos(this.lookYaw);
+        wish.set(s * ahead + c * strafe, 0, c * ahead - s * strafe);
+      } else {
+        wish.set(strafe, 0, -ahead);
+      }
     }
 
     const moving = wish.lengthSq() > 0;
@@ -232,8 +246,10 @@ export class Player {
     const loadPenalty = load > 1 ? Math.max(0.42, 1 - (load - 1) * 1.1) : 1;
 
     const wantsSprint = input.sprint && moving && state.stamina > 1;
-    const topSpeed = (wantsSprint ? SPRINT_SPEED : WALK_SPEED) * loadPenalty;
+    const jogging = !wantsSprint && input.jog && moving;
+    const topSpeed = (wantsSprint ? SPRINT_SPEED : jogging ? JOG_SPEED : WALK_SPEED) * loadPenalty;
 
+    // Sprinting burns stamina; jogging is free, so it recovers while you travel.
     if (wantsSprint) state.stamina = Math.max(0, state.stamina - dt * 20);
     else state.stamina = Math.min(100, state.stamina + dt * 16);
 
@@ -245,20 +261,27 @@ export class Player {
     // An explicit facing wins: while working, the character stays squared up to
     // what it's hitting even as the approach nudges it around.
     if (this.faceGoal !== null && this.faceGoal !== undefined) this.facing = this.faceGoal;
+    // Looking somewhere is a decision; walking somewhere is a consequence. So
+    // the look wins over the movement direction, and only the working systems
+    // override it.
+    else if (this.lookYaw !== null) this.facing = this.lookYaw;
     else if (moving) this.facing = Math.atan2(wish.x, wish.z);
     const delta = ((this.facing - this.mesh.rotation.y + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
     this.mesh.rotation.y += delta * Math.min(1, dt * 16);
 
     resolveCollisions(this, colliders);
-    this.animate(dt, moving, wantsSprint);
+    this.animate(dt, moving, wantsSprint, jogging);
   }
 
-  animate(dt, moving, sprinting) {
+  animate(dt, moving, sprinting, jogging = false) {
     if (this.rig.ok) {
       // Match playback rate to ground speed so the feet don't skate.
       if (this.searching || this.busy > 0) this.rig.setBase('idle', 1);
       else if (!moving) this.rig.setBase('idle', 1);
       else if (sprinting) this.rig.setBase('run', THREE.MathUtils.clamp(this.velocity.length() / SPRINT_SPEED, 0.7, 1.3));
+      // A jog is the run cycle taken easier, not the walk hurried: hurrying the
+      // walk is what makes a character look like it is scurrying.
+      else if (jogging) this.rig.setBase('run', THREE.MathUtils.clamp(this.velocity.length() / SPRINT_SPEED, 0.62, 0.95));
       else this.rig.setBase('walk', THREE.MathUtils.clamp(this.velocity.length() / WALK_SPEED, 0.6, 1.5));
       this.rig.update(dt);
     } else {

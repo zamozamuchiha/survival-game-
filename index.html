@@ -147,6 +147,7 @@
   .rec .ic { font-size: 20px; }
   .rec .nm { font-size: 12px; font-weight: 600; flex: 1; }
   .rec .lv { font-size: 9px; opacity: .5; letter-spacing: .1em; }
+  .rec .purpose { font-size: 10px; opacity: .62; line-height: 1.5; margin: 2px 0 6px; }
   .rec .ing { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 9px; font-size: 10.5px; }
   .rec .ing span.ok { color: #9ecf86; }
   .rec .ing span.no { color: #e2624a; }
@@ -172,6 +173,7 @@
   #buildhint.on { display: flex; }
   .bh-pick { font-size: 13px; letter-spacing: .04em; }
   .bh-pick i { font-style: normal; opacity: .6; font-size: 11px; margin-left: 6px; }
+  .bh-pick.bh-demo { color: #e2624a; }
   .bh-keys { font-size: 9.5px; letter-spacing: .1em; opacity: .5; }
   .bh-keys b { color: #d2a545; font-weight: 700; }
   #buildwhy { position: absolute; bottom: 128px; left: 50%; transform: translateX(-50%);
@@ -287,9 +289,9 @@
   <div id="prompt"><span id="prompt-text"></span><div id="searchbar"><i></i></div></div>
 
   <div id="keys">
-    <kbd>WASD</kbd> move &middot; <kbd>SHIFT</kbd> sprint &middot; <kbd>SPACE</kbd> attack<br>
+    <kbd>WASD</kbd> move &middot; <kbd>&larr;&uarr;&darr;&rarr;</kbd> look &middot; <kbd>J</kbd> jog &middot; <kbd>SHIFT</kbd> sprint &middot; <kbd>SPACE</kbd> attack<br>
     <kbd>E</kbd> interact &middot; <kbd>TAB</kbd> inventory &middot; <kbd>C</kbd> craft<br>
-    <kbd>M</kbd> map &middot; <kbd>B</kbd> build &middot; <kbd>ESC</kbd> close
+    <kbd>M</kbd> map &middot; <kbd>B</kbd> build &middot; <kbd>V</kbd> view &middot; <kbd>P</kbd> graphics &middot; <kbd>ESC</kbd> close
   </div>
 
   <div id="toasts"></div>

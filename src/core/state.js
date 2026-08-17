@@ -30,6 +30,10 @@ export const state = {
   seenLocations: ['home', 'pine'],
 
   stats: { kills: 0, crafted: 0, deaths: 0, runs: 0 },
+
+  // One-off deliveries already made, by id. Stops a hand-out from arriving again
+  // on every load, and from coming back after the player throws it away.
+  granted: [],
 };
 
 export function slotCount() {

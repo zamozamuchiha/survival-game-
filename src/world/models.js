@@ -13,9 +13,10 @@ import {
 } from './procgen/structures.js';
 import {
   makeAxe, makePickaxe, makeCrowbar, makeSpear, makeBat, makeMachete,
-  makePistol, makeRifle,
+  makePistol, makeRifle, makeAK,
 } from './procgen/tools.js';
 import { makeLog, makeBranch, makeFirewood, makeStump } from './procgen/logs.js';
+import { makeRuinWall, makeRuinFrame, makeRubble, makeDeadFire } from './procgen/ruins.js';
 
 // Central model registry. Everything the game renders looks up a key here.
 //
@@ -235,6 +236,7 @@ export const GENERATED = {
   tool_machete:    (rng) => makeMachete(rng),
   tool_pistol:     (rng) => makePistol(rng),
   tool_rifle:      (rng) => makeRifle(rng),
+  tool_ak74:       (rng) => makeAK(rng),
 
   // Round timber. Bark outside, growth rings on every cut face — the kit models
   // these replace carried their own texture and no longer matched the boards.
@@ -244,6 +246,17 @@ export const GENERATED = {
   log_b: (rng) => makeLog(rng, { length: 0.9, radius: 0.12 }),
   branch_a: (rng) => makeBranch(rng),
   stump: (rng) => makeStump(rng),
+
+  // What is left of other people's buildings. Only ever placed away from home —
+  // the camp is meant to be the one green place you come back to.
+  ruin_wall_a: (rng) => makeRuinWall(rng),
+  ruin_wall_b: (rng) => makeRuinWall(rng, { burnt: true }),
+  ruin_wall_c: (rng) => makeRuinWall(rng, { survival: 0.25 }),
+  ruin_frame_a: (rng) => makeRuinFrame(rng),
+  ruin_frame_b: (rng) => makeRuinFrame(rng),
+  rubble_a: (rng) => makeRubble(rng),
+  rubble_b: (rng) => makeRubble(rng),
+  dead_fire_a: (rng) => makeDeadFire(rng),
 
   twig_a: (rng) => makeTwig(rng),
   twig_b: (rng) => makeTwig(rng),
@@ -269,6 +282,9 @@ export const VARIANTS = {
   scatter:     ['rock_small_a', 'rock_small_b', 'rock_small_c',
                 'twig_a', 'twig_b', 'twig_c', 'leaf_litter_a', 'leaf_litter_b'],
   pickup_wood: ['pickup_wood_a', 'pickup_wood_b'],
+  ruin_wall:  ['ruin_wall_a', 'ruin_wall_b', 'ruin_wall_c'],
+  ruin_frame: ['ruin_frame_a', 'ruin_frame_b'],
+  rubble:     ['rubble_a', 'rubble_b'],
   pickup_stone:['pickup_stone_a', 'pickup_stone_b'],
 };
 

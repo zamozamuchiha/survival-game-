@@ -19,6 +19,24 @@ export class BuildController {
     this.selected = null;
     this.rot = 0;
     this.target = null;
+    /** Demolition mode: the cursor picks pieces to take down, not places to build. */
+    this.removing = false;
+    this.removeKey = null;
+  }
+
+  /**
+   * Switches between building and taking down.
+   *
+   * Right-click already removed a piece, but a hidden verb with no cursor
+   * feedback is one nobody finds: you click at a spot, something somewhere
+   * within a couple of metres disappears, and if nothing was in range you get
+   * no answer at all. A mode you can see yourself in fixes both.
+   */
+  toggleRemove() {
+    this.removing = !this.removing;
+    this.removeKey = null;
+    if (this.removing) this.base?.hideGhost();
+    return this.removing;
   }
 
   open(id = null) {
@@ -30,6 +48,9 @@ export class BuildController {
   close() {
     this.active = false;
     this.target = null;
+    this.removing = false;
+    this.removeKey = null;
+    this.base?.showRemoveTarget(null);
     this.base?.setBuildMode(false);
   }
 
@@ -37,6 +58,7 @@ export class BuildController {
     this.selected = BUILDING[id] ? id : null;
     this.rot = 0;
     this.target = null;
+    this.removing = false;      // picking something to build means you want to build
   }
 
   rotate() { this.rot = (this.rot + 1) % 4; }
@@ -70,7 +92,18 @@ export class BuildController {
   // ---- aiming ---------------------------------------------------------
 
   /** Points the ghost at a world position. Returns the target, or null. */
-  aim(point) {
+  aim(point, picked = null) {
+    // In demolition mode the cursor hunts for the nearest piece instead of a
+    // free socket, and the base outlines whatever it found. `picked` is what the
+    // ray actually struck, which is the only thing that can tell a roof from the
+    // floor under it; proximity is the fallback for pointing at open ground.
+    if (this.active && this.removing) {
+      this.removeKey = picked ?? (point ? this.base.nearestSocket(point, 2.6) : null);
+      this.base.hideGhost();
+      this.base.showRemoveTarget(this.removeKey);
+      return null;
+    }
+    this.base?.showRemoveTarget(null);
     if (!this.active || !this.selected || !point) {
       this.target = null;
       this.base?.hideGhost();
@@ -110,9 +143,9 @@ export class BuildController {
   }
 
   /** Takes down whatever is nearest the point and refunds half of it. */
-  removeAt(point) {
-    const key = this.base.nearestSocket(point);
-    if (!key) return { ok: false };
+  removeAt(point, picked = null) {
+    const key = picked ?? (point ? this.base.nearestSocket(point, 2.6) : null);
+    if (!key || !this.base.get(key)) return { ok: false, msg: 'Nothing there to take down' };
     const cell = this.base.get(key);
     const bp = blueprint(cell.item);
 
@@ -123,6 +156,8 @@ export class BuildController {
     this.base.remove(key);
     for (const r of refundFor(cell.item)) addItem(state.inv, r.id, r.n);
 
+    this.removeKey = null;
+    this.base.showRemoveTarget(null);
     this.onRemoved(cell.item, key);
     return { ok: true, id: cell.item, msg: `${bp?.label ?? 'Piece'} taken down` };
   }

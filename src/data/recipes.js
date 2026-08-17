@@ -15,8 +15,12 @@ export const STATIONS = {
 
 export const RECIPES = [
   // ---- by hand --------------------------------------------------------
-  { station: 'hands', lvl: 1, xp: 4,  time: 1.2, out: { id: 'axe_stone', n: 1 },  in: [{ id: 'wood', n: 12 }, { id: 'stone', n: 8 }] },
-  { station: 'hands', lvl: 1, xp: 4,  time: 1.2, out: { id: 'pick_stone', n: 1 }, in: [{ id: 'wood', n: 12 }, { id: 'stone', n: 10 }] },
+  // The first two tools are deliberately cheap. Everything in the game is
+  // gated behind owning them, so the opening is the one stretch where the
+  // player has no way to speed themselves up — making them grind for it buys
+  // nothing but the time it takes.
+  { station: 'hands', lvl: 1, xp: 4,  time: 1.2, out: { id: 'axe_stone', n: 1 },  in: [{ id: 'wood', n: 5 }, { id: 'stone', n: 5 }] },
+  { station: 'hands', lvl: 1, xp: 4,  time: 1.2, out: { id: 'pick_stone', n: 1 }, in: [{ id: 'wood', n: 5 }, { id: 'stone', n: 5 }] },
   { station: 'hands', lvl: 1, xp: 3,  time: 0.8, out: { id: 'spear', n: 1 },      in: [{ id: 'wood', n: 14 }, { id: 'fiber', n: 6 }] },
   { station: 'hands', lvl: 1, xp: 2,  time: 0.6, out: { id: 'rope', n: 1 },       in: [{ id: 'fiber', n: 8 }] },
   { station: 'hands', lvl: 2, xp: 3,  time: 0.8, out: { id: 'bandage', n: 2 },    in: [{ id: 'cloth', n: 3 }, { id: 'fiber', n: 4 }] },

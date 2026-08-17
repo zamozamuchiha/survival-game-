@@ -4,6 +4,7 @@ import { LOCATIONS, locationById } from '../data/locations.js';
 import { state, level, slotCount, carryLimit, carriedWeight, resizeInventory } from '../core/state.js';
 import { addItem, removeAt, countItem, freeSlots } from '../core/inventory.js';
 import { recipesFor, recipeStatus, craft } from '../core/crafting.js';
+import { TOOL_PURPOSE } from '../data/harvest.js';
 import { toast } from './toast.js';
 
 const $ = (id) => document.getElementById(id);
@@ -124,7 +125,7 @@ function renderDetail() {
 
   if (def.dmg) lines.push(`Damage <b>${def.dmg}</b> · Speed <b>${def.speed}s</b>${def.reach ? ` · Reach <b>${def.reach}m</b>` : ''}`);
   if (def.ranged) lines.push(`Ranged · uses <b>${ITEMS[def.ammo].name}</b> · you have <b>${countItem(state.inv, def.ammo)}</b>`);
-  if (def.tool) lines.push(`Efficient for <b>${def.tool}</b> nodes`);
+  if (def.tool) lines.push(`<b>${TOOL_PURPOSE[def.tool] ?? ''}</b>`);
   if (def.armor) lines.push(`Absorbs <b>${Math.round(def.armor * 100)}%</b> damage`);
   if (def.slots) lines.push(`+<b>${def.slots}</b> slots · +<b>${def.carry}</b> kg carry`);
   if (def.food) lines.push(`Hunger <b>+${def.food}</b>`);
@@ -213,6 +214,8 @@ function renderStorage() {
     if (!taken) return;
     const left = addItem(box, taken.id, taken.n, taken.dur);
     if (left > 0) addItem(state.inv, taken.id, left, taken.dur);
+    const stored = taken.n - left;
+    if (stored > 0) ctx.onStore?.(taken.id, stored);
     renderStorage();
     ctx.onChange?.();
   });
@@ -250,6 +253,7 @@ function renderCrafting() {
         <span class="nm">${out.name}${r.out.n > 1 ? ` ×${r.out.n}` : ''}</span>
         <span class="lv">LV ${r.lvl}</span>
       </div>
+      ${out.tool ? `<div class="purpose">${TOOL_PURPOSE[out.tool] ?? ''}</div>` : ''}
       <div class="ing">${ings}</div>
       <button class="btn" data-r="${i}" ${st.ok ? '' : 'disabled'}>${st.ok ? 'CRAFT' : st.why.toUpperCase()}</button>
     </div>`;

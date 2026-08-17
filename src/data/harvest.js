@@ -135,3 +135,19 @@ export const TOOL_NAMES = {
   mine: 'a pickaxe',
   salvage: 'a crowbar',
 };
+
+/**
+ * What each class of tool is actually for, in the player's words.
+ *
+ * The tool classes are strictly enforced — swingDamage returns zero for the
+ * wrong one, so a pickaxe does literally nothing to a tree. That needs saying
+ * outright: an axe and a pickaxe made of the same material read as two stone
+ * tools rather than as one for wood and one for rock, and "efficient for chop
+ * nodes" tells a player neither what it does nor that it is the only thing that
+ * will.
+ */
+export const TOOL_PURPOSE = {
+  chop: 'Fells trees and cuts wood. Nothing else will.',
+  mine: 'Breaks rock and ore. Nothing else will.',
+  salvage: 'Strips wrecks for metal. Nothing else will.',
+};

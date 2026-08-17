@@ -1,17 +1,23 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { ResourceNode } from './nodes.js';
 import { scatterContainers } from './containers.js';
 import { scatterPickups } from './pickups.js';
 import { getModel, getParts, pickVariant, fitHeight } from './models.js';
 import { InstanceBatch, instanceOf } from './instancing.js';
 import { CAMP_CLEAR_HALF } from './base.js';
+import { PEACEFUL } from '../data/locations.js';
 import { surfaceMaterial } from './textures.js';
 import { GrassField } from './grass.js';
 import { Zombie } from '../entities/zombie.js';
 
 // Shadow map resolution and the half-width of the area it covers, in metres.
 // Exported so the render loop can snap the light to the same texel grid.
-export const SHADOW_RES = 2048;
+// Read through functions, not constants: the graphics setting can change
+// between location loads, and the shadow map is rebuilt with the scene.
+export const SHADOW_RES = 2048;          // the ceiling, for callers that size buffers
+export const shadowRes = () => quality().shadowRes;
+export const shadowExtent = () => quality().shadowExtent;
 export const SHADOW_EXTENT = 26;
 
 // Metres per ground tile. Kenney's tile is authored 1x1, so this doubles as the
@@ -161,11 +167,22 @@ function buildTerrain(rng, biome, radius, plotHalf = 0) {
       new THREE.Quaternion().setFromAxisAngle(upAxis, rng.range(0, Math.PI * 2)),
       new THREE.Vector3(s, s, s)));
   }
+  // Unlit, and tinted towards the horizon.
+  //
+  // These cones are a silhouette standing in for a forest fifty metres out, not
+  // objects anyone inspects. Lit like real geometry, the side facing away from
+  // the sun goes black — invisible from overhead, a black wedge across the sky
+  // at eye level. A flat colour part-way to the sky lets the fog finish the job
+  // and reads as distance rather than as a prop.
+  const ringColour = new THREE.Color(biome.tree)
+    .lerp(new THREE.Color(biome.skyHorizon ?? biome.fog), 0.42);
   const ring = instanceOf(
     ringGeo,
-    new THREE.MeshStandardMaterial({ color: biome.tree, roughness: 1, flatShading: true }),
+    new THREE.MeshBasicMaterial({ color: ringColour, fog: true }),
     ringMats);
   ring.frustumCulled = false;
+  ring.castShadow = false;
+  ring.receiveShadow = false;
   g.add(ring);
 
   return g;
@@ -209,6 +226,9 @@ function scatterNodes(scene, rng, counts, biome, radius, clear) {
 function scatterDecor(scene, rng, counts, biome, radius, avoid, clear) {
   const batch = new InstanceBatch();
   const solids = [];
+  // Scenery trees, recorded so the game can turn one into a real, choppable
+  // tree when the player walks up to it. Drawn as instances until then.
+  const trees = [];
   const taken = avoid.map((o) => ({ p: o.position, r: 2.6 }));
 
   const place = (type, count) => {
@@ -241,10 +261,15 @@ function scatterDecor(scene, rng, counts, biome, radius, avoid, clear) {
         radiusOut = height > 0.9 ? 0.7 : 0;
       }
 
-      if (!key || !batch.add(key, height, pos, rng.range(0, Math.PI * 2))) continue;
+      const pid = key && batch.add(key, height, pos, rng.range(0, Math.PI * 2));
+      if (!pid) continue;
 
       taken.push({ p: pos, r: type === 'tree' ? 2.2 : 1.3 });
-      if (radiusOut > 0) solids.push({ position: pos, radius: radiusOut, active: true, entity: null });
+      const solid = radiusOut > 0
+        ? { position: pos, radius: radiusOut, active: true, entity: null }
+        : null;
+      if (solid) solids.push(solid);
+      if (type === 'tree') trees.push({ pid, position: pos, height, solid, node: null });
     }
   };
 
@@ -253,11 +278,97 @@ function scatterDecor(scene, rng, counts, biome, radius, avoid, clear) {
   place('bush', counts.bush ?? 0);
 
   scene.add(batch.build());
+  return { solids, trees, batch };
+}
+
+/**
+ * Ruins, placed as small holdings rather than scattered pieces.
+ *
+ * A lone broken wall in a field reads as set dressing. Three of them round a
+ * rectangle, with rubble where the fourth would be and a cold fire beside it,
+ * reads as somewhere a family lived — and that is the whole difference between a
+ * prop and a story.
+ *
+ * Never at home: the camp is the one place meant to feel like it is still yours.
+ */
+function scatterRuins(scene, rng, count, radius, avoid, clear) {
+  const batch = new InstanceBatch();
+  const solids = [];
+  const taken = avoid.map((o) => ({ p: o.position, r: 3.2 }));
+
+  for (let i = 0; i < count; i++) {
+    let at = null;
+    // Reach right out to the treeline. Capped six metres short of it, the outer
+    // ring of every map came out empty — and the outer ring is where the trees
+    // are thickest, so the "keep clear of scenery" test rejected most of what
+    // did get proposed out there. The band nobody could build in ended up being
+    // exactly the band that most needed something in it.
+    const inner = clear + 6;
+    const outer = radius - 3;
+    for (let tries = 0; tries < 40 && !at; tries++) {
+      const a = rng.range(0, Math.PI * 2);
+      // Uniform over the ring's area rather than its radius, so the wide outer
+      // band gets its fair share instead of the same count as the narrow middle.
+      const d = Math.sqrt(rng.range((inner / outer) ** 2, 1)) * outer;
+      const c = new THREE.Vector3(Math.cos(a) * d, 0, Math.sin(a) * d);
+      if (taken.some((t) => t.p.distanceTo(c) < t.r + 3.5)) continue;
+      at = c;
+    }
+    if (!at) continue;
+    taken.push({ p: at, r: 7 });
+
+    // A footprint, and which of its sides are still up.
+    const w = rng.range(3.5, 5.5);
+    const d2 = rng.range(3.0, 4.5);
+    const yaw = rng.range(0, Math.PI * 2);
+    const cos = Math.cos(yaw);
+    const sin = Math.sin(yaw);
+    const put = (lx, lz, key, size, rot) => {
+      const p = new THREE.Vector3(at.x + lx * cos - lz * sin, 0, at.z + lx * sin + lz * cos);
+      if (batch.add(key, size, p, yaw + rot)) {
+        solids.push({ position: p, radius: 0.8, active: true, entity: null });
+      }
+    };
+
+    // Walls along the long sides, in segments, most of them missing.
+    const segs = Math.max(2, Math.round(w / 2));
+    for (const side of [-1, 1]) {
+      for (let sIdx = 0; sIdx < segs; sIdx++) {
+        if (rng.chance(0.42)) continue;
+        const lx = -w / 2 + (sIdx + 0.5) * (w / segs);
+        put(lx, side * d2 / 2, pickVariant('ruin_wall', rng), rng.range(1.6, 2.3), 0);
+      }
+    }
+    // One end wall, sometimes.
+    if (rng.chance(0.55)) {
+      put(-w / 2, 0, pickVariant('ruin_wall', rng), rng.range(1.5, 2.2), Math.PI / 2);
+    }
+    // The frame of whatever stood at the other end.
+    if (rng.chance(0.6)) put(w / 2 - 0.6, 0, pickVariant('ruin_frame', rng), rng.range(2.0, 2.8), 0);
+
+    // Rubble inside and out, and the fire someone sat at.
+    for (let k = 0; k < rng.int(2, 4); k++) {
+      const lx = rng.range(-w / 2, w / 2);
+      const lz = rng.range(-d2, d2);
+      const p = new THREE.Vector3(at.x + lx * cos - lz * sin, 0, at.z + lx * sin + lz * cos);
+      batch.add(pickVariant('rubble', rng), rng.range(0.35, 0.6), p, rng.range(0, Math.PI * 2), 'span');
+    }
+    if (rng.chance(0.5)) {
+      const a2 = rng.range(0, Math.PI * 2);
+      const r2 = rng.range(3.5, 6);
+      batch.add('dead_fire_a', 0.28,
+        new THREE.Vector3(at.x + Math.cos(a2) * r2, 0, at.z + Math.sin(a2) * r2),
+        rng.range(0, Math.PI * 2));
+    }
+  }
+
+  scene.add(batch.build());
   return solids;
 }
 
 function spawnZombies(scene, rng, mix, radius) {
   const list = [];
+  if (PEACEFUL) return list;
   for (const [type, n] of Object.entries(mix)) {
     for (let i = 0; i < n; i++) {
       const a = rng.range(0, Math.PI * 2);
@@ -309,7 +420,12 @@ function buildSky(biome) {
       }`,
   });
 
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(320, 24, 14), mat);
+  // Inside the camera's far plane, or it is clipped away and the sky renders as
+  // the cleared background — which is black. The overhead camera hides that,
+  // because looking down there is barely any sky on screen; at eye level it is
+  // half the picture. frustumCulled is off so the dome is never dropped as a
+  // whole, but that does nothing about per-fragment far clipping.
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(280, 24, 14), mat);
   sky.frustumCulled = false;
   sky.renderOrder = -1;
   return sky;
@@ -331,17 +447,32 @@ export function buildLocation(def, rng) {
   fill.position.set(-20, 14, -16);
   scene.add(fill);
 
+  // Light coming up off the ground.
+  //
+  // Nothing needed this while the only camera looked down: you never saw the
+  // underside of anything. At eye level you see them constantly — the soffit of
+  // a roof, the inside of a canopy — and with a sun overhead and no bounce at
+  // all they render flat black. Leaves are the worst of it, because their
+  // material is double-sided and three flips the shading normal downwards on the
+  // far face, pointing it away from every light in the scene.
+  //
+  // Weak and warm, aimed straight up. It is the cheapest stand-in for radiosity
+  // there is, and it costs one more light rather than a second render pass.
+  const bounce = new THREE.DirectionalLight(0xbcae8e, 0.55);
+  bounce.position.set(0, -10, 0);
+  scene.add(bounce);
+
   const sun = new THREE.DirectionalLight(0xffeccc, 2.9);
   sun.position.set(26, 40, 18);
   sun.castShadow = true;
   // A tight frustum around the player beats a huge one: same texel budget over a
   // much smaller area, so contact shadows stay crisp instead of blocky.
-  sun.shadow.mapSize.set(SHADOW_RES, SHADOW_RES);
+  sun.shadow.mapSize.set(shadowRes(), shadowRes());
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 110;
   Object.assign(sun.shadow.camera, {
-    left: -SHADOW_EXTENT, right: SHADOW_EXTENT,
-    top: SHADOW_EXTENT, bottom: -SHADOW_EXTENT,
+    left: -shadowExtent(), right: shadowExtent(),
+    top: shadowExtent(), bottom: -shadowExtent(),
   });
   sun.shadow.camera.updateProjectionMatrix();
   sun.shadow.bias = -0.00015;
@@ -360,7 +491,10 @@ export function buildLocation(def, rng) {
   const containers = def.containers
     ? scatterContainers(scene, rng, def.containers, def.loot, radius - 3, nodes)
     : [];
-  const decor = scatterDecor(scene, rng, def.decor ?? {}, biome, radius, [...nodes, ...containers], clear);
+  const scenery = scatterDecor(scene, rng, def.decor ?? {}, biome, radius, [...nodes, ...containers], clear);
+  const decor = scenery.solids;
+  // Home has none: it is the one place that is supposed to still be yours.
+  if (def.ruins) decor.push(...scatterRuins(scene, rng, def.ruins, radius, [...nodes, ...containers], clear));
   const pickups = scatterPickups(scene, rng, def.pickups, radius, clear, [...nodes, ...containers]);
   const zombies = spawnZombies(scene, rng, def.zombies ?? {}, radius);
 
@@ -370,5 +504,9 @@ export function buildLocation(def, rng) {
     color: new THREE.Color(biome.ground).offsetHSL(0.01, 0.10, 0.06).getHex(),
   });
 
-  return { scene, sun, nodes, containers, zombies, decor, pickups, grass, radius };
+  return {
+    scene, sun, nodes, containers, zombies, decor, pickups, grass, radius,
+    // Scenery trees the player can promote to real ones by walking up to them.
+    scenery,
+  };
 }

@@ -5,15 +5,16 @@ import { state, level, resetRun, resizeInventory, carriedWeight, carryLimit } fr
 import { save, load } from './core/save.js';
 import { addItem, removeItem, removeAt, countItem, drainAll, freeSlots, makeSlots } from './core/inventory.js';
 import { ITEMS } from './data/items.js';
-import { LOCATIONS, locationById, ENERGY_MAX, ENERGY_REGEN_PER_SEC } from './data/locations.js';
+import { LOCATIONS, locationById, ENERGY_MAX, ENERGY_REGEN_PER_SEC, PEACEFUL } from './data/locations.js';
 import { rollDrops } from './data/loot.js';
-import { buildLocation, SHADOW_RES, SHADOW_EXTENT } from './world/location.js';
-import { Base } from './world/base.js';
+import { buildLocation, shadowRes, shadowExtent } from './world/location.js';
+import { Base, ensureStarterPlot } from './world/base.js';
 import { BuildController } from './core/build.js';
 import {
   initBuildMenu, open as openBuildMenu, close as closeBuildMenu,
   isBuildMenuOpen, refreshBuildMenu, refreshBuildHint,
 } from './ui/buildmenu.js';
+import { ResourceNode } from './world/nodes.js';
 import { Player } from './entities/player.js';
 import { Zombie } from './entities/zombie.js';
 import { HarvestController } from './entities/harvest.js';
@@ -26,21 +27,25 @@ import { openCreator } from './ui/creator.js';
 import { initPanels, openPanel, closePanels, isPanelOpen, refreshPanels, currentPanel } from './ui/panels.js';
 import { toast } from './ui/toast.js';
 import { report, reportTravel, onMissionEvent, activeMission } from './core/missions.js';
-
-// Camera sits on a fixed angle; the wheel slides it along that line.
-const CAMERA_DIR = new THREE.Vector3(0, 12.5, 10.5).normalize();
-const CAMERA_MIN = 6;
-const CAMERA_MAX = 30;
-let camDist = 16.3;
+import { quality, qualityName, cycleQuality, LEVELS } from './core/quality.js';
+import {
+  placeCamera, cycleView, viewName, view, zoom as cameraZoom, resetYaw, VIEWS,
+  initLook, grabLook, releaseLook, lookYaw, aimFromCentre, looking, wasLookDrag,
+  turnFromKeys,
+} from './core/camera.js';
 
 addEventListener('wheel', (e) => {
-  camDist = THREE.MathUtils.clamp(camDist + Math.sign(e.deltaY) * 1.4, CAMERA_MIN, CAMERA_MAX);
+  // Step size scales with the view: 1.4m is a nudge from overhead and a lurch
+  // from over the shoulder.
+  cameraZoom(Math.sign(e.deltaY) * (viewName() === 'overhead' ? 1.4 : 0.35));
 }, { passive: true });
 
 // ---------------------------------------------------------------- renderer
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// A Retina panel reports 2, which means four screen pixels for every logical
+// one — the main pass pays for all of them. The graphics setting caps it.
+renderer.setPixelRatio(Math.min(devicePixelRatio, quality().pixelRatio));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -52,6 +57,7 @@ const clock = new THREE.Clock();
 const rng = makeRng(Date.now() & 0xffff);
 
 initInput(renderer.domElement);
+initLook(renderer.domElement);
 
 // ---------------------------------------------------------------- world
 
@@ -66,6 +72,62 @@ const tracers = [];
 // Browsers won't start audio until the player has interacted with the page.
 for (const evt of ['keydown', 'mousedown', 'touchstart']) {
   addEventListener(evt, () => unlockAudio(), { once: true });
+}
+
+// How close you have to be for a scenery tree to become a real one, and how far
+// before it goes back to being scenery. The gap between the two stops a tree
+// flickering between the states while you stand at the edge of the range.
+const PROMOTE_IN = 15;
+const PROMOTE_OUT = 22;
+let sceneryTimer = 0;
+
+/**
+ * Swaps scenery trees for choppable ones around the player.
+ *
+ * Every tree in the world is fellable, but they cannot all be real at once: a
+ * real tree is its own mesh with its own draw call and its own collider, and
+ * there are up to two hundred and forty of them on a map. So the far ones stay
+ * in the instanced batch, which draws the lot in a handful of calls, and only
+ * the dozen or so within swinging distance are promoted.
+ *
+ * A tree that has been hit keeps its damage and stays real, and a felled one
+ * never goes back — otherwise walking away and returning would undo the work.
+ */
+function updateScenery(dt) {
+  if (!loc?.scenery?.trees?.length) return;
+  sceneryTimer -= dt;
+  if (sceneryTimer > 0) return;
+  sceneryTimer = 0.4;
+
+  let changed = false;
+  for (const t of loc.scenery.trees) {
+    const d = t.position.distanceTo(player.position);
+
+    if (!t.node && !t.felled && d < PROMOTE_IN) {
+      const node = new ResourceNode('tree', t.position, rng, loc.def.biome);
+      node.addTo(loc.scene);
+      loc.nodes.push(node);
+      loc.scenery.batch.setVisible(t.pid, false);
+      if (t.solid) t.solid.active = false;      // the node brings its own
+      t.node = node;
+      changed = true;
+    } else if (t.node && d > PROMOTE_OUT) {
+      const node = t.node;
+      // Only an untouched, standing tree may go back to being scenery.
+      if (node.alive && !node.dying && node.hp === node.maxHp) {
+        node.removeFrom(loc.scene);
+        const i = loc.nodes.indexOf(node);
+        if (i >= 0) loc.nodes.splice(i, 1);
+        loc.scenery.batch.setVisible(t.pid, true);
+        if (t.solid) t.solid.active = true;
+        t.node = null;
+        changed = true;
+      } else if (!node.alive) {
+        t.felled = true;                        // stays real: it holds the stump
+      }
+    }
+  }
+  if (changed) rebuildColliders();
 }
 
 function rebuildColliders() {
@@ -547,10 +609,15 @@ function setBuildMode(on) {
 const shakeVec = new THREE.Vector3();
 const pointer = new THREE.Vector2(0, 0);
 const raycaster = new THREE.Raycaster();
+const camRay = new THREE.Raycaster();
+const camDir = new THREE.Vector3();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const hitPoint = new THREE.Vector3();
 
 addEventListener('mousemove', (e) => {
+  // With the mouse captured there is no cursor to follow, so everything that
+  // aims — building, demolishing — aims down the middle of the screen instead.
+  if (aimFromCentre()) { pointer.set(0, 0); return; }
   pointer.x = (e.clientX / innerWidth) * 2 - 1;
   pointer.y = -(e.clientY / innerHeight) * 2 + 1;
 });
@@ -559,6 +626,31 @@ addEventListener('mousemove', (e) => {
 function cursorOnGround() {
   raycaster.setFromCamera(pointer, camera);
   return raycaster.ray.intersectPlane(groundPlane, hitPoint) ? hitPoint : null;
+}
+
+/**
+ * How far a camera can pull back from the player before it hits something.
+ *
+ * Only the base is tested: walls and floors are what you actually back into
+ * indoors, and testing every tree as well would cost more than it is worth for a
+ * camera that is already inches from the character.
+ */
+function cameraBlocked(from, to) {
+  if (!loc?.base) return from.distanceTo(to);
+  camDir.subVectors(to, from);
+  const reach = camDir.length();
+  if (reach < 1e-4) return reach;
+  camRay.set(from, camDir.multiplyScalar(1 / reach));
+  loc.base.root.updateMatrixWorld(true);
+  const hit = camRay.intersectObject(loc.base.root, true)[0];
+  return hit && hit.distance < reach ? hit.distance : reach;
+}
+
+/** The base piece under the cursor, if the ray strikes one. */
+function cursorPick() {
+  if (!loc?.base) return null;
+  raycaster.setFromCamera(pointer, camera);
+  return loc.base.pickKey(raycaster);
 }
 
 /** Everything a piece must not be dropped on top of. */
@@ -595,17 +687,32 @@ function makeBuilder() {
 }
 
 renderer.domElement.addEventListener('mousedown', (e) => {
+  // A click in a close view is how the mouse gets captured — the browser only
+  // grants pointer lock from inside a real gesture. If it refuses, the
+  // right-button drag in core/camera.js does the same job without it.
+  if (viewName() !== 'overhead' && !isPanelOpen() && !isBuildMenuOpen()) grabLook();
+  if (e.button === 2) return;          // handled on release, see below
   if (!buildMode() || isBuildMenuOpen()) return;
   e.preventDefault();
-  if (e.button === 0) {
-    const r = builder.place();
-    if (!r.ok && r.msg) toast(r.msg, 'bad');
-  }
-  if (e.button === 2) {
+  const strike = () => {
     const point = cursorOnGround();
-    const r = point ? builder.removeAt(point) : { ok: false };
-    if (r.ok) toast(r.msg);
-  }
+    const r = builder.removeAt(point, cursorPick());
+    toast(r.msg, r.ok ? undefined : 'bad');
+  };
+  // Left click builds, or demolishes while in demolition mode.
+  if (builder.removing) { strike(); return; }
+  const r = builder.place();
+  if (!r.ok && r.msg) toast(r.msg, 'bad');
+});
+
+// Right click demolishes — on release, so a right-button drag can be told apart
+// from a right-button click. The drag is how you look around without pointer
+// lock, and it must not tear your camp down on the way past.
+renderer.domElement.addEventListener('mouseup', (e) => {
+  if (e.button !== 2 || !buildMode() || isBuildMenuOpen() || wasLookDrag()) return;
+  const point = cursorOnGround();
+  const r = builder.removeAt(point, cursorPick());
+  toast(r.msg, r.ok ? undefined : 'bad');
 });
 
 // ---------------------------------------------------------------- panels wiring
@@ -613,6 +720,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
 initPanels({
   onTravel: (id) => travelTo(id),
   onUse: (i) => useItem(i),
+  onStore: (id, n) => report('store', id, n),
   onChange: () => { rebuildColliders(); refreshBuildMenu(); save(); },
   nearbyStation: () => (loc?.base ? loc.base.stationAt(player.position) : null),
   availableStations: () => {
@@ -650,6 +758,26 @@ function handlePanelKeys() {
     isPanelOpen() && currentPanel() === 'craft'
       ? closePanels()
       : openPanel('craft', { station: loc.base?.stationAt(player.position) ?? 'hands' });
+  }
+  // Anything that needs the cursor takes the mouse back.
+  if (isPanelOpen() || isBuildMenuOpen()) releaseLook();
+  if (input.consumePress('KeyJ')) {
+    input.jog = !input.jog;
+    toast(input.jog ? 'Jogging' : 'Walking', 'info');
+  }
+  if (input.consumePress('KeyV')) {
+    const name = cycleView();
+    resetYaw(player);
+    toast(`<b>View: ${VIEWS[name].name}</b><br>${VIEWS[name].note}`, 'info');
+  }
+  if (input.consumePress('KeyP')) {
+    const name = cycleQuality();
+    const q = LEVELS[name];
+    // The world is rebuilt because grass density and shadow casting are baked
+    // into the meshes when a location is built, not read per frame.
+    renderer.setPixelRatio(Math.min(devicePixelRatio, q.pixelRatio));
+    loadLocation(loc.def);
+    toast(`<b>Graphics: ${q.name}</b><br>${q.note}`, 'info');
   }
   if (input.consumePress('KeyM')) {
     isPanelOpen() && currentPanel() === 'map' ? closePanels() : openPanel('map');
@@ -695,6 +823,12 @@ function frame() {
   if (ev) onHarvestEvent(ev);
 
   player.searching = !!searching;
+  // Arrows turn the view in the close views. Overhead has no camera to turn, so
+  // there they stay a second set of movement keys.
+  input.arrowsMove = viewName() === 'overhead';
+  if (!paused) turnFromKeys(dt, input);
+  // Only the close views steer by looking; overhead keeps walking by compass.
+  player.lookYaw = viewName() !== 'overhead' && looking() ? lookYaw() : null;
   player.update(dt, input, colliders, !paused && !buildMode() && !searching);
 
   // Death can come from any source (zombies, starvation, bad food) — catch it here
@@ -732,8 +866,10 @@ function frame() {
     loc.zombies.splice(i, 1);
     structural = true;
   }
-  // Pressure keeps up: the horde refills over time in hostile zones.
-  if (loc.def.timer > 0) {
+  // Pressure keeps up: the horde refills over time in hostile zones. This is a
+  // second spawner, independent of the one that seeds a location, so the peace
+  // switch has to be honoured here as well or walkers trickle back in.
+  if (!PEACEFUL && loc.def.timer > 0) {
     const want = Object.values(loc.def.zombies).reduce((a, b) => a + b, 0);
     if (loc.zombies.length < want && rng() < dt * 0.25) {
       const types = Object.keys(loc.def.zombies);
@@ -753,11 +889,13 @@ function frame() {
     if (tracers[i].life <= 0) { loc.scene.remove(tracers[i].line); tracers.splice(i, 1); }
   }
 
+  updateScenery(dt);
+
   // Grass sways and parts around whoever is standing in it.
   loc.grass?.update(dt, player.position);
 
   if (loc.base) {
-    loc.base.animate(clock.elapsedTime, player.position, dt);
+    loc.base.animate(clock.elapsedTime, player.position, dt, camera.position.y);
     // You step up onto your own deck rather than wading through it.
     player.setStandHeight(loc.base.surfaceY(player.position.x, player.position.z), dt);
   }
@@ -765,7 +903,11 @@ function frame() {
 
   if (buildMode()) {
     if (input.consumePress('KeyR')) builder.rotate();
-    const t = isBuildMenuOpen() ? null : builder.aim(cursorOnGround());
+    if (input.consumePress('KeyX')) {
+      builder.toggleRemove();
+      refreshBuildHint();
+    }
+    const t = isBuildMenuOpen() ? null : builder.aim(cursorOnGround(), cursorPick());
     const why = document.getElementById('buildwhy');
     const msg = t && !t.ok ? t.reason : null;
     why.textContent = msg ?? '';
@@ -776,16 +918,16 @@ function frame() {
 
   // Rigid follow — no smoothing, so the camera never lags or sways behind the player.
   const knock = shakeOffset(dt, shakeVec);
-  camera.position.set(
-    player.position.x + CAMERA_DIR.x * camDist + knock.x,
-    CAMERA_DIR.y * camDist + knock.y,
-    player.position.z + CAMERA_DIR.z * camDist + knock.z);
-  camera.lookAt(player.position.x, 1.1, player.position.z);
+  placeCamera(camera, player, dt, knock, cameraBlocked);
+  // The character's own head fills the screen in first person, so it steps out
+  // of the way. Everything else about the body carries on as normal — the held
+  // tool still swings, and the shadow on the ground is still theirs.
+  player.mesh.visible = !view().hideSelf;
   updateFx(dt, camera);
 
   // Snap the shadow frustum to whole texels, otherwise the shadow edges crawl
   // as the light box slides along with the player.
-  const texel = (SHADOW_EXTENT * 2) / SHADOW_RES;
+  const texel = (shadowExtent() * 2) / shadowRes();
   const sx = Math.round(player.position.x / texel) * texel;
   const sz = Math.round(player.position.z / texel) * texel;
   loc.sun.position.set(sx + 26, 40, sz + 18);
@@ -830,6 +972,27 @@ addEventListener('beforeunload', () => {
   renderer.dispose();
   renderer.forceContextLoss();
 });
+
+/**
+ * Hands over something once and remembers that it did.
+ *
+ * Straightforward hand-outs rather than loot or crafting: asked for directly,
+ * and recorded in the save so it neither multiplies on every load nor returns
+ * after being dropped. Delete the entry to stop giving it.
+ */
+const HANDOUTS = [
+  { id: 'ak74', items: [{ id: 'ak74', n: 1 }, { id: 'ammo_545', n: 180 }], say: 'AK-74 · 180 rounds' },
+];
+
+function deliverHandouts() {
+  state.granted = state.granted ?? [];
+  for (const h of HANDOUTS) {
+    if (state.granted.includes(h.id)) continue;
+    for (const it of h.items) addItem(state.inv, it.id, it.n);
+    state.granted.push(h.id);
+    setTimeout(() => toast(`<b>${h.say}</b> added to your bag`, 'info'), 1800);
+  }
+}
 
 // ---------------------------------------------------------------- boot
 
@@ -883,6 +1046,8 @@ if (assets.missing.length) {
 const returning = load();
 resizeInventory();
 migrateBase();
+ensureStarterPlot();
+deliverHandouts();
 initBuildMenu(() => builder);
 
 // Build a character before the world exists. Keyed off the character itself,

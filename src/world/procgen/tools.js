@@ -394,3 +394,88 @@ export function makeRifle(rng) {
   }
   return b.build();
 }
+
+/**
+ * An AK-74.
+ *
+ * Built around the grip at the origin like every other tool here, with the
+ * muzzle down local -Y, so the hand slot carries it the same way it carries an
+ * axe. The silhouette is what has to read at a glance: the long curved magazine
+ * ahead of the trigger, the gas tube above the barrel, and the muzzle brake — a
+ * shape nobody mistakes for the bolt-action hunting rifle already in the game.
+ */
+export function makeAK(rng) {
+  const b = builder();
+
+  // Barrel, gas block and the slotted brake at the end.
+  const barrel = new THREE.CylinderGeometry(0.0085, 0.0095, 0.44, 8);
+  barrel.translate(0, -0.30, 0.004);
+  b.add('steel', barrel);
+
+  const brake = new THREE.CylinderGeometry(0.016, 0.014, 0.075, 8);
+  brake.translate(0, -0.545, 0.004);
+  b.add('steel', brake);
+
+  const gasTube = new THREE.CylinderGeometry(0.009, 0.009, 0.22, 6);
+  gasTube.translate(0, -0.235, 0.026);
+  b.add('steel', gasTube);
+
+  const gasBlock = new THREE.BoxGeometry(0.020, 0.045, 0.034);
+  gasBlock.translate(0, -0.35, 0.018);
+  b.add('steel', gasBlock);
+
+  // Receiver, the body everything hangs off.
+  const receiver = new THREE.BoxGeometry(0.030, 0.20, 0.062);
+  receiver.translate(0, -0.045, 0.002);
+  b.add('steel', receiver);
+
+  const dustCover = new THREE.BoxGeometry(0.032, 0.15, 0.020);
+  dustCover.translate(0, -0.03, 0.036);
+  b.add('steel', dustCover);
+
+  // The curved magazine, in banana sections — the one silhouette everybody knows.
+  for (let i = 0; i < 5; i++) {
+    const t = i / 4;
+    const seg = new THREE.BoxGeometry(0.024, 0.048, 0.038 - t * 0.004);
+    // Each section leans a little further forward than the last, which is the
+    // curve. Stepping it beats bending a box and costs four extra faces.
+    seg.rotateX(-0.13 * t);
+    seg.translate(0, -0.135 - t * 0.045, -0.030 - t * 0.030);
+    b.add('iron', seg);
+  }
+
+  // Furniture. Wood on a 74 is usually laminate or polymer, but a warm brown
+  // reads better against the grey than another slab of grey would.
+  const fore = new THREE.BoxGeometry(0.034, 0.17, 0.042);
+  fore.translate(0, -0.20, -0.010);
+  b.add('wood', fore);
+
+  const upperHand = new THREE.BoxGeometry(0.026, 0.13, 0.028);
+  upperHand.translate(0, -0.225, 0.030);
+  b.add('wood', upperHand);
+
+  const grip = new THREE.BoxGeometry(0.028, 0.095, 0.034);
+  grip.rotateX(0.30);
+  grip.translate(0, 0.045, -0.028);
+  b.add('wood', grip);
+
+  const stock = new THREE.BoxGeometry(0.032, 0.26, 0.050);
+  stock.rotateX(-0.04);
+  stock.translate(0, 0.185, -0.014);
+  b.add('wood', stock);
+
+  // Sights: rear notch on the receiver, front post on the gas block.
+  const rear = new THREE.BoxGeometry(0.016, 0.012, 0.022);
+  rear.translate(0, -0.125, 0.048);
+  b.add('steel', rear);
+  const front = new THREE.CylinderGeometry(0.005, 0.006, 0.038, 6);
+  front.translate(0, -0.355, 0.042);
+  b.add('steel', front);
+
+  const trigger = new THREE.BoxGeometry(0.008, 0.026, 0.010);
+  trigger.rotateX(0.2);
+  trigger.translate(0, -0.012, -0.014);
+  b.add('steel', trigger);
+
+  return b.build();
+}

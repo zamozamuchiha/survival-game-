@@ -73,6 +73,37 @@ const cellEdges = (gx, gz) => [
   { layer: 'wall', socket: 'edge', gx: gx + 1, gz, side: 'w' },
 ];
 
+/** Cells from the camp centre that come already decked. A 3x3, so 6x6 metres. */
+const STARTER_PLOT = 1;
+
+/**
+ * Lays the platform the player spawns standing on.
+ *
+ * Deliberately only ground: a foundation and a floor, no walls, no roof, no
+ * door. It is not a house — it is the answer to "where does my base go", which
+ * an empty field does not give you. Everything above it is still the player's
+ * to put up, and the opening mission still asks them to lay a foundation and a
+ * floor of their own, because goals count what you build rather than what is
+ * standing.
+ *
+ * Only ever runs on an empty plot, so it can be called on every boot and will
+ * never overwrite something the player put there.
+ */
+export function ensureStarterPlot() {
+  if (Object.keys(state.base).length > 0) return false;
+  for (let gx = -STARTER_PLOT; gx <= STARTER_PLOT; gx++) {
+    for (let gz = -STARTER_PLOT; gz <= STARTER_PLOT; gz++) {
+      for (const layer of ['foundation', 'floor']) {
+        const id = layer === 'foundation' ? 'foundation_wood' : 'floor_wood';
+        state.base[cellKey(layer, gx, gz)] = {
+          item: id, hp: blueprint(id)?.hp ?? 100, rot: 0,
+        };
+      }
+    }
+  }
+  return true;
+}
+
 /** Stable per-socket variant pick, so a wall keeps its board pattern on reload. */
 function variantFor(key, models) {
   let h = 0;
@@ -188,6 +219,16 @@ export class Base {
     this.ghost.visible = false;
     scene.add(this.ghost);
     this.ghostId = null;
+
+    // Outline drawn round the piece the cursor would take down. Demolition
+    // without it is a guess: you click, something within a couple of metres
+    // vanishes, and you find out afterwards whether it was the one you meant.
+    this.removeMarker = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+      new THREE.LineBasicMaterial({ color: 0xe2624a, depthTest: false, transparent: true, opacity: 0.95 }));
+    this.removeMarker.renderOrder = 999;
+    this.removeMarker.visible = false;
+    scene.add(this.removeMarker);
     this.roofFade = 1;
 
     this.rebuild();
@@ -225,6 +266,7 @@ export class Base {
     mesh.position.copy(pos);
     mesh.rotation.y = yaw + (cell.rot ?? 0) * (Math.PI / 2);
     mesh.userData.socket = t;
+    mesh.userData.socketKey = key;
     this.root.add(mesh);
     this.meshes.set(key, mesh);
   }
@@ -319,7 +361,34 @@ export class Base {
     return cell;
   }
 
-  /** The piece nearest this point, for the take-it-down button. */
+  /**
+   * The piece the cursor is actually pointing at.
+   *
+   * Distance on the ground plane cannot separate a roof from the floor beneath
+   * it — every layer of a cell shares the same x and z, so whichever happened to
+   * be inserted first always won and a ceiling could never be selected at all.
+   * Hitting the meshes with the real ray is the only way to tell a stack apart.
+   *
+   * Returns null when the ray misses the base entirely; callers fall back to
+   * proximity so pointing at bare ground beside a piece still finds it.
+   */
+  pickKey(raycaster) {
+    // A piece placed this frame has not had its world matrix computed yet, and
+    // raycasting against a stale matrix quietly returns whatever was underneath
+    // it instead. Cheap next to the intersection test itself.
+    this.root.updateMatrixWorld(true);
+    const hits = raycaster.intersectObject(this.root, true);
+    for (const h of hits) {
+      let o = h.object;
+      while (o && o !== this.root) {
+        if (o.userData.socketKey) return o.userData.socketKey;
+        o = o.parent;
+      }
+    }
+    return null;
+  }
+
+  /** The piece nearest this point, for when the ray hits nothing. */
   nearestSocket(point, range = 2.2) {
     let best = null;
     let bestD = range * range;
@@ -463,21 +532,52 @@ export class Base {
 
   hideGhost() { this.ghost.visible = false; }
 
+  /**
+   * Outlines the piece at `key`, or clears the outline when given nothing.
+   *
+   * The box is sized by layer rather than measured off the mesh: a wall is a
+   * slab on a boundary, a floor is a whole cell, and an outline that hugged the
+   * actual boards would be a mess of edges instead of one readable shape.
+   */
+  showRemoveTarget(key) {
+    if (!key || !state.base[key]) { this.removeMarker.visible = false; return; }
+    const t = parseKey(key);
+    const { pos, yaw } = socketTransform(t);
+    const m = this.removeMarker;
+
+    if (t.socket === 'edge') m.scale.set(CELL, WALL_H, 0.3);
+    else if (t.layer === 'roof') m.scale.set(CELL, 0.3, CELL);
+    else if (t.layer === 'object') m.scale.set(1.3, 1.2, 1.3);
+    else m.scale.set(CELL, DECK_TOP + 0.16, CELL);
+
+    m.position.set(pos.x, pos.y + m.scale.y / 2, pos.z);
+    m.rotation.y = yaw;
+    m.visible = true;
+  }
+
   setBuildMode(on) {
     this.gridHelper.visible = on;
-    if (!on) this.hideGhost();
+    if (!on) { this.hideGhost(); this.removeMarker.visible = false; }
   }
 
   // ---- per-frame ------------------------------------------------------
 
-  animate(t, playerPos, dt = 1 / 60) {
+  animate(t, playerPos, dt = 1 / 60, cameraY = Infinity) {
     // Exponential, not a fixed step per frame: a fixed step makes the door open
     // twice as fast at 120fps as at 60, and crawl on a slow machine.
     const k = 1 - Math.exp(-dt * 9);
 
-    // A roof you can't see under is a roof you can't play under. Fade the lot
-    // out the moment the player steps beneath one, and back in when they leave.
-    const want = playerPos && this.isSheltered(playerPos) ? 0.12 : 1;
+    // A roof you can't see under is a roof you can't play under — but only when
+    // the camera is above it. Looking down from overhead, a solid roof hides the
+    // whole room and the fade is the only way in. Standing inside at eye level,
+    // the camera is under the roof already: fading it there means the ceiling of
+    // your own hut turns to glass and you watch the sky through it.
+    //
+    // So the test is where the camera is, not where the player is. That covers
+    // every view at once, including the shoulder camera when it slides out
+    // through a doorway, without any of them naming themselves here.
+    const above = cameraY > LAYERS.roof.y + 0.35;
+    const want = playerPos && above && this.isSheltered(playerPos) ? 0.12 : 1;
     if (Math.abs(this.roofFade - want) > 0.002) {
       this.roofFade += (want - this.roofFade) * k;
       const solid = this.roofFade > 0.5;

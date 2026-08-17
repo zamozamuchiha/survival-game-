@@ -12,6 +12,7 @@
 //   harvest   depleted a resource node ('tree', 'rock', 'iron', 'bush', 'wreck')
 //   kill      killed a zombie type, or 'any'
 //   build     placed a building piece
+//   store     moved an item from the backpack into a storage box
 //   travel    arrived in a location id
 //
 // `next` chains the following mission. Missions unlock in order, one at a time,
@@ -65,6 +66,18 @@ export const MISSIONS = [
     ],
     reward: { xp: 50 },
     hint: 'Press B at camp. Materials come straight out of your bag — no crafting first.',
+    next: 'first_storage',
+  },
+  {
+    id: 'first_storage',
+    title: 'A place for everything',
+    brief: 'A camp only starts being useful when it keeps your supplies safe. Build a box, then put something inside it.',
+    goals: [
+      { kind: 'build', what: 'box_storage', n: 1, label: 'Build a storage box' },
+      { kind: 'store', what: 'any', n: 1, label: 'Store one item in it' },
+    ],
+    reward: { xp: 35 },
+    hint: 'Choose Storage Box with B, build it on a floor, then press E beside it and click an item from your backpack.',
     next: 'first_run',
   },
   {
@@ -73,6 +86,8 @@ export const MISSIONS = [
     brief: 'Everything worth having is somewhere else. Travel to Pine Bushes and come back alive.',
     goals: [
       { kind: 'travel', what: 'pine', n: 1, label: 'Reach Pine Bushes' },
+      // Unreachable while data/locations.js has PEACEFUL set: nothing spawns to
+      // kill. Turn the walkers back on, or drop this goal.
       { kind: 'kill', what: 'any', n: 2, label: 'Put down two of them' },
       { kind: 'travel', what: 'home', n: 1, label: 'Get back to camp' },
     ],

@@ -5,7 +5,7 @@ const KEY = 'lastlight.save.v1';
 // to state that should survive a reload has to be named here too.
 const FIELDS = ['hp', 'maxHp', 'hunger', 'thirst', 'stamina', 'poison', 'xp',
   'energy', 'inv', 'equip', 'base', 'graves', 'seenLocations', 'stats',
-  'character', 'missions'];
+  'character', 'missions', 'granted'];
 
 export function save() {
   try {

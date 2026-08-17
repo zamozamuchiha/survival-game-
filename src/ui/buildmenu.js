@@ -91,10 +91,17 @@ function renderHint() {
   if (!ctrl?.active) { el.classList.remove('on'); return; }
   el.classList.add('on');
 
+  if (ctrl.removing) {
+    el.innerHTML = `<span class="bh-pick bh-demo">✕ <b>Demolition</b> <i>half the materials come back</i></span>
+      <span class="bh-keys">
+        <b>CLICK</b> take down &nbsp; <b>X</b> back to building &nbsp; <b>ESC</b> exit</span>`;
+    return;
+  }
+
   const id = ctrl.selected;
   if (!id) {
     el.innerHTML = `<span class="bh-pick">Nothing selected</span>
-      <span class="bh-keys"><b>B</b> menu &nbsp; <b>ESC</b> leave build mode</span>`;
+      <span class="bh-keys"><b>B</b> menu &nbsp; <b>X</b> demolish &nbsp; <b>ESC</b> leave build mode</span>`;
     return;
   }
   const bp = BUILDING[id];
@@ -102,7 +109,7 @@ function renderHint() {
     .map(([res, n]) => `${resIcon(res)}${n}`).join(' ');
   el.innerHTML = `<span class="bh-pick">${bp.icon} <b>${bp.label}</b> <i>${cost}</i></span>
     <span class="bh-keys">
-      <b>CLICK</b> place &nbsp; <b>RIGHT-CLICK</b> take down &nbsp;
+      <b>CLICK</b> place &nbsp; <b>X</b> demolish &nbsp;
       <b>R</b> rotate &nbsp; <b>B</b> menu &nbsp; <b>ESC</b> exit</span>`;
 }
 

@@ -4,6 +4,10 @@ import { clone as cloneSkinned } from 'three/SkeletonUtils.js';
 import { makeRng } from '../core/rng.js';
 import { makeTree } from './procgen/trees.js';
 import { makeRock } from './procgen/rocks.js';
+import { makeVehicle } from './procgen/vehicles.js';
+// Renamed on import: this file already has a VARIANTS of its own, holding the
+// pick-one-of-these groups the world scatters from.
+import { VARIANTS as VEHICLES, resolveVariant } from '../data/vehicles.js';
 import { makeTwig, makeLeafLitter } from './procgen/debris.js';
 import { makeBush } from './procgen/bushes.js';
 import { makePlankWall, makePlankFloor, makePlankDoor } from './procgen/timber.js';
@@ -110,17 +114,33 @@ export const MODELS = {
   bedroll:       'survival/bedroll.glb',
   signpost:      'survival/signpost.glb',
 
-  // --- wrecks -----------------------------------------------------------
-  wreck_sedan:  'cars/sedan.glb',
-  wreck_truck:  'cars/truck.glb',
-  wreck_van:    'cars/delivery.glb',
-  wreck_suv:    'cars/suv.glb',
-  wreck_taxi:   'cars/taxi.glb',
-  wreck_police: 'cars/police.glb',
-  wreck_ambo:   'cars/ambulance.glb',
-  debris_tire:  'cars/debris-tire.glb',
-  debris_door:  'cars/debris-door.glb',
-  debris_plate: 'cars/debris-plate-a.glb',
+  // --- vehicles ---------------------------------------------------------
+  // These load clean. The wreck_* keys below are generated from them — nothing
+  // in the game places a car that has not been wrecked first.
+  // Quaternius Zombie Apocalypse Kit (CC0). Three shapes, about three times the
+  // geometry of the Kenney kit they replaced and with a real body texture.
+  //
+  // All seven body classes map onto those three on purpose. Mixing the two kits
+  // was tried and the difference was obvious in the same shot: consistent
+  // quality with a shape repeated reads better than variety where half the fleet
+  // is visibly cruder. Colour, condition and damage still make each one
+  // different. The Kenney cars stay in the repo for the debris parts.
+  car_sedan:  'cars/q_Sports.gltf',
+  car_police: 'cars/q_Sports.gltf',
+  car_taxi:   'cars/q_Pickup.gltf',
+  car_suv:    'cars/q_Pickup.gltf',
+  car_truck:  'cars/q_Truck.gltf',
+  car_van:    'cars/q_Truck.gltf',
+  car_ambo:   'cars/q_Truck.gltf',
+  debris_tire:    'cars/debris-tire.glb',
+  debris_door:    'cars/debris-door.glb',
+  debris_plate:   'cars/debris-plate-a.glb',
+  debris_plate_b: 'cars/debris-plate-b.glb',
+  debris_bumper:  'cars/debris-bumper.glb',
+  debris_drive:   'cars/debris-drivetrain.glb',
+  debris_window:  'cars/debris-door-window.glb',
+  road_cone:      'cars/cone.glb',
+  road_cone_flat: 'cars/cone-flat.glb',
 
   // --- characters: skinned Mixamo humanoids, smooth deformation ---------
   // Xbot is the lean civilian build. Soldier is bulkier, so it only shows up as
@@ -153,6 +173,22 @@ export const ANIM_SOURCE = {
  * trees rather than one tree at five rotations.
  */
 export const GENERATED = {
+  // Vehicles. One entry per variant in data/vehicles.js, each baked once from
+  // the clean kit shell it names and then weathered to its own configuration.
+  //
+  // Baking a fixed pool rather than generating per placement is deliberate: a
+  // map can carry a dozen vehicles, and a pool means a dozen *instanced* draws
+  // from twelve shared meshes instead of a dozen unique ones. The variety comes
+  // from twelve distinct configurations plus rotation and the debris around
+  // them, which is enough that no two spots read the same.
+  ...Object.fromEntries(VEHICLES.map((v) => [
+    v.id,
+    (rng) => {
+      const resolved = resolveVariant(v.id);
+      return makeVehicle(getModel(resolved.body.source), resolved, rng);
+    },
+  ])),
+
   tree_oak_a:  (rng) => makeTree(rng, 'oak'),
   tree_oak_b:  (rng) => makeTree(rng, 'oak'),
   tree_oak_c:  (rng) => makeTree(rng, 'oak'),
@@ -168,6 +204,7 @@ export const GENERATED = {
   tree_dead_a: (rng) => makeTree(rng, 'dead'),
   tree_dead_b: (rng) => makeTree(rng, 'dead'),
   tree_dead_c: (rng) => makeTree(rng, 'dead'),
+
 
   rock_a: (rng) => makeRock(rng, 'boulder'),
   rock_b: (rng) => makeRock(rng, 'block'),
@@ -273,7 +310,7 @@ export const VARIANTS = {
   bush:        ['bush_a', 'bush_b', 'bush_c', 'bush_d', 'bush_e', 'bush_f'],
   rock:        ['rock_a', 'rock_b', 'rock_c', 'rock_d', 'rock_e'],
   ore:         ['ore_a', 'ore_b', 'ore_c'],
-  wreck:       ['wreck_sedan', 'wreck_truck', 'wreck_van', 'wreck_suv', 'wreck_taxi', 'wreck_police'],
+  wreck:       VEHICLES.map((v) => v.id),
   zombie:      ['char_zombie_a', 'char_zombie_b', 'char_zombie_c'],
   // Ground litter only. No fallen logs — anything branch-shaped and gatherable is
   // a pickup, and scenery that looks gatherable but isn't is a lie the player has

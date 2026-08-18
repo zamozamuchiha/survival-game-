@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { makeRng } from './core/rng.js';
 import { initInput, input } from './core/input.js';
 import { state, level, resetRun, resizeInventory, carriedWeight, carryLimit } from './core/state.js';
-import { save, load } from './core/save.js';
+import { save, load, backupInfo, restoreBackup } from './core/save.js';
 import { addItem, removeItem, removeAt, countItem, drainAll, freeSlots, makeSlots } from './core/inventory.js';
 import { ITEMS } from './data/items.js';
 import { LOCATIONS, locationById, ENERGY_MAX, ENERGY_REGEN_PER_SEC, PEACEFUL } from './data/locations.js';
@@ -10,6 +10,7 @@ import { rollDrops } from './data/loot.js';
 import { buildLocation, shadowRes, shadowExtent } from './world/location.js';
 import { Base, ensureStarterPlot } from './world/base.js';
 import { BuildController } from './core/build.js';
+import { blueprint } from './data/building.js';
 import {
   initBuildMenu, open as openBuildMenu, close as closeBuildMenu,
   isBuildMenuOpen, refreshBuildMenu, refreshBuildHint,
@@ -18,15 +19,23 @@ import { ResourceNode } from './world/nodes.js';
 import { Player } from './entities/player.js';
 import { Zombie } from './entities/zombie.js';
 import { HarvestController } from './entities/harvest.js';
-import { IMPACT_FX } from './data/harvest.js';
+import { IMPACT_FX, swingDamage } from './data/harvest.js';
 import { spawnImpact, updateFx, resetFx, addShake, shakeOffset, rumble } from './world/fx.js';
-import { playSound, unlockAudio } from './core/audio.js';
+import { playSound, unlockAudio, cycleAudio, musicWanted, MODE_LABEL } from './core/audio.js';
+import { startMusic, stopMusic } from './core/music.js';
 import { updateHud, hideLoader, setLoaderText, showDeath, onRespawn } from './ui/hud.js';
 import { loadModels, buildGenerated } from './world/models.js';
 import { openCreator } from './ui/creator.js';
-import { initPanels, openPanel, closePanels, isPanelOpen, refreshPanels, currentPanel } from './ui/panels.js';
+import { initPanels, openPanel, closePanels, isPanelOpen, refreshPanels, currentPanel, focusPlot }
+  from './ui/panels.js';
 import { toast } from './ui/toast.js';
-import { report, reportTravel, onMissionEvent, activeMission } from './core/missions.js';
+import { report, reportTravel, onMissionEvent, registerMeasure, refreshMeasured, currentChapter }
+  from './core/missions.js';
+import { addXp, onLevelUp, primeUnlocks, takeNewUnlocks, levelInfo } from './core/progress.js';
+import { grantOnce, getBalance, formatMoney, onWalletChange, SURV } from './core/wallet.js';
+import { refreshLand, onLandChange, isUnlocked as plotUnlocked } from './core/land.js';
+import { selftest } from './core/selftest.js';
+import { selectSlot, syncHand, SLOTS, hotbarView } from './core/hotbar.js';
 import { quality, qualityName, cycleQuality, LEVELS } from './core/quality.js';
 import {
   placeCamera, cycleView, viewName, view, zoom as cameraZoom, resetYaw, VIEWS,
@@ -69,9 +78,15 @@ let searching = null;    // { target, progress, total }
 let harvester = null;    // HarvestController, built with the player
 const tracers = [];
 
-// Browsers won't start audio until the player has interacted with the page.
+// Browsers won't start audio until the player has interacted with the page. The
+// score waits on the same gesture, and resume() is not instant, so it is tried
+// again shortly after rather than once and given up on.
 for (const evt of ['keydown', 'mousedown', 'touchstart']) {
-  addEventListener(evt, () => unlockAudio(), { once: true });
+  addEventListener(evt, () => {
+    unlockAudio();
+    startMusic();
+    setTimeout(startMusic, 400);
+  }, { once: true });
 }
 
 // How close you have to be for a scenery tree to become a real one, and how far
@@ -242,8 +257,19 @@ function travelTo(id, free = false) {
 function nearestHarvestable(range = 6) {
   const facing = new THREE.Vector3(Math.sin(player.mesh.rotation.y), 0, Math.cos(player.mesh.rotation.y));
   const to = new THREE.Vector3();
-  let best = null;
-  let bestScore = Infinity;
+  const weapon = player.weapon;
+
+  // Two shortlists, because the tool in hand decides what a swing is for.
+  //
+  // A node the tool can't work still has to be reachable — walking up to a tree
+  // with a pickaxe should say "you need an axe", not silently pick something
+  // else. But it must not outrank a job the player can actually do: with a
+  // pickaxe in hand and a rock in front of them, a tree a metre nearer used to
+  // swallow every swing and refuse. So the workable target wins unless the
+  // unworkable one is what they are plainly standing at, by a clear margin.
+  const CLEARLY_AIMED = 1.2;
+  let best = null, bestScore = Infinity;
+  let spare = null, spareScore = Infinity;
 
   for (const n of loc.nodes) {
     if (!n.alive || n.dying) continue;
@@ -256,8 +282,14 @@ function nearestHarvestable(range = 6) {
     const aim = d < 1.2 ? 1 : to.normalize().dot(facing);
     if (aim < -0.2) continue;
     const score = d - aim * 1.5;
-    if (score < bestScore) { bestScore = score; best = n; }
+
+    if (swingDamage(n.type, weapon) > 0) {
+      if (score < bestScore) { bestScore = score; best = n; }
+    } else if (score < spareScore) { spareScore = score; spare = n; }
   }
+
+  if (!best) return spare;
+  if (spare && spareScore + CLEARLY_AIMED < bestScore) return spare;
   return best;
 }
 
@@ -300,13 +332,20 @@ function attack() {
     if (killed) onZombieKilled(z);
   }
 
-  if (connected) wearWeapon();
+  if (connected) { playSound('hit', rng.range(0.94, 1.07)); wearWeapon(); }
+  else playSound('whoosh', rng.range(0.9, 1.12));
 }
 
 function fireRanged(w) {
   const eq = state.equip.weapon;
-  if (countItem(state.inv, w.ammo) < 1) { toast('Out of ammo', 'bad'); return; }
+  if (countItem(state.inv, w.ammo) < 1) {
+    toast('Out of ammo', 'bad');
+    playSound('dryfire');
+    return;
+  }
   removeItem(state.inv, w.ammo, 1);
+  // Slight detune per round so a burst doesn't read as one sample on repeat.
+  playSound('shot', rng.range(0.97, 1.03));
 
   // Shoot where you are looking, not where your feet are pointing.
   //
@@ -383,10 +422,10 @@ function onHarvestEvent(ev) {
 
   if (ev.type === 'depleted') {
     report('harvest', ev.node.type, 1);
-    state.xp += 5;
+    addXp(5, 'harvest');
     state.stats.harvested = (state.stats.harvested ?? 0) + 1;
   } else {
-    state.xp += 1;
+    addXp(1, 'harvest');
   }
 }
 
@@ -412,7 +451,7 @@ function wearWeapon() {
 
 function onZombieKilled(z) {
   report('kill', z.type, 1);
-  state.xp += z.def.xp;
+  addXp(z.def.xp, 'kill');
   state.stats.kills++;
   const drops = rollDrops(z.type, rng);
   if (drops.length) give(drops);
@@ -497,10 +536,11 @@ function interactPress(target) {
     }
     target.obj.items = left;
     refreshPanels();
+    playSound('pickup', rng.range(0.94, 1.08));
     if (left.length) { toast('Bag full', 'bad'); return; }
     loc.scene.remove(target.obj.mesh);
     loc.pickups.splice(loc.pickups.indexOf(target.obj), 1);
-    state.xp += 1;
+    addXp(1, 'pickup');
   } else if (target.type === 'base') {
     const { cell, bp } = target.obj;
     if (bp.capacity) {
@@ -531,7 +571,7 @@ function updateSearch(dt, target) {
       if (rem < d.n) toast(`${ITEMS[d.id].icon} ${ITEMS[d.id].name} ×${d.n - rem}`);
     }
     if (leftover.length) { c.putBack(leftover); toast('Bag full', 'bad'); }
-    state.xp += 5;
+    addXp(5, 'search');
     searching = null;
     refreshPanels();
   }
@@ -581,6 +621,7 @@ function useItem(index) {
   if (def.hp) state.hp = Math.max(0, Math.min(state.maxHp, state.hp + def.hp));
   if (def.cure) state.poison = 0;
   player.busy = def.use ?? 1;
+  playSound(def.water ? 'drink' : 'eat', rng.range(0.94, 1.07));
   toast(`Used ${def.name}`, 'info');
   if (state.hp <= 0) die();
 }
@@ -595,6 +636,7 @@ function die() {
     if (state.equip[key]) { items.push(state.equip[key]); state.equip[key] = null; }
   }
   state.stats.deaths++;
+  playSound('die');
   if (items.length) {
     state.graves[state.locationId] = { x: player.position.x, z: player.position.z, items };
   }
@@ -691,11 +733,85 @@ function obstructedAt(x, z) {
   return false;
 }
 
+// ---------------------------------------------------------------- footsteps
+
+let lastHp = 100;
+let hurtCooldown = 0;
+let strideLeft = 0;
+const lastFoot = new THREE.Vector3();
+
+// Boots are paced by ground covered, not by a timer: walk slowly and the steps
+// come slowly, sprint and they come quickly, with no separate speed to keep in
+// sync with the animation. A deck answers a footfall differently from turf, so
+// the base is asked what is underfoot.
+const STRIDE = 1.55;   // metres between footfalls
+
+function footsteps() {
+  if (!player || state.hp <= 0) { lastFoot.copy(player?.position ?? lastFoot); return; }
+  const moved = Math.hypot(player.position.x - lastFoot.x, player.position.z - lastFoot.z);
+  lastFoot.copy(player.position);
+  // A teleport (travel, respawn) would otherwise fire a burst of steps.
+  if (moved > 1.5 || moved < 1e-4) { strideLeft = STRIDE * 0.5; return; }
+
+  strideLeft -= moved;
+  if (strideLeft > 0) return;
+  strideLeft = STRIDE;
+
+  const onDeck = (loc?.base?.surfaceY(player.position.x, player.position.z) ?? 0) > 0;
+  playSound(onDeck ? 'step_wood' : 'step_soft', rng.range(0.86, 1.16));
+}
+
 function afterBuildChange() {
   loc.grass?.refresh(player.position);   // grass gives way, or grows back
   rebuildColliders();
   refreshBuildMenu();
+  // A wall going up or coming down changes how enclosed the deck is, and so can
+  // extending the floor. Nothing reports that as an event, so re-measure here —
+  // this runs after every placement and every demolition.
+  refreshMeasured();
   save();
+}
+
+// How much of the deck is walled in. The mission system asks; the base answers.
+registerMeasure('enclose', () => {
+  const shell = openEdges();
+  // No deck at all would otherwise read as "nothing to close, job done".
+  return { have: shell.have, need: shell.need || 1, note: wallShortfall(shell.need - shell.have) };
+});
+
+// Whether the bag holds enough of one resource to finish the shell. The target
+// is the wall price times the edges still open, so it asks for exactly what the
+// job takes and follows any change to either.
+registerMeasure('stockpile', (goal) => {
+  const shell = openEdges();
+  const left = Math.max(0, shell.need - shell.have);
+  const per = blueprint('wall_wood')?.cost?.[goal.what] ?? 0;
+  return { have: countItem(state.inv, goal.what), need: per * left };
+});
+
+const openEdges = () => loc?.base?.enclosure() ?? { have: 0, need: 0 };
+
+/**
+ * What finishing the shell will cost, against what is actually in the bag.
+ *
+ * "3/12" tells you how far you have got and nothing about what the rest takes.
+ * Twelve wooden walls are 120 wood, which is a dozen trees — without that number
+ * in front of you the objective looks like a short errand right up until you run
+ * out halfway through. The cost comes from the blueprint, so retuning the wall
+ * price moves this line with it, and only the bag counts because that is what
+ * building actually spends.
+ */
+function wallShortfall(left) {
+  if (left <= 0) return null;
+  const cost = blueprint('wall_wood')?.cost ?? {};
+  const missing = [];
+  for (const [res, per] of Object.entries(cost)) {
+    const short = per * left - countItem(state.inv, res);
+    if (short > 0) missing.push(`${short} ${(ITEMS[res]?.name ?? res).toLowerCase()}`);
+  }
+  const walls = `${left} wall${left === 1 ? '' : 's'} to go`;
+  return missing.length ? `${walls} · gather ${missing.join(' and ')}`
+                        : `${walls} · you have the materials`;
 }
 
 function makeBuilder() {
@@ -703,12 +819,12 @@ function makeBuilder() {
     base: loc.base,
     station: () => loc.base?.stationAt(player.position) ?? null,
     onPlaced: (id) => {
-      state.xp += 2;
+      addXp(2, 'build');
       report('build', id, 1);
-      playSound('chop', 0.9);
+      playSound('build', rng.range(0.95, 1.06));
       afterBuildChange();
     },
-    onRemoved: () => afterBuildChange(),
+    onRemoved: () => { playSound('demolish', rng.range(0.94, 1.07)); afterBuildChange(); },
   });
 }
 
@@ -727,8 +843,20 @@ renderer.domElement.addEventListener('mousedown', (e) => {
   };
   // Left click builds, or demolishes while in demolition mode.
   if (builder.removing) { strike(); return; }
+
+  // Clicking ground you do not own is a question, not a mistake — answer it with
+  // the shop rather than a refusal you cannot act on.
+  const point = cursorOnGround();
+  const plot = point ? loc.base?.plotAtPoint(point) : null;
+  if (plot && !plotUnlocked(plot.id)) {
+    playSound('ui');
+    focusPlot(plot.id);
+    openPanel('land');
+    return;
+  }
+
   const r = builder.place();
-  if (!r.ok && r.msg) toast(r.msg, 'bad');
+  if (!r.ok && r.msg) { toast(r.msg, 'bad'); playSound('deny'); }
 });
 
 // Right click demolishes — on release, so a right-button drag can be told apart
@@ -747,7 +875,7 @@ initPanels({
   onTravel: (id) => travelTo(id),
   onUse: (i) => useItem(i),
   onStore: (id, n) => report('store', id, n),
-  onChange: () => { rebuildColliders(); refreshBuildMenu(); save(); },
+  onChange: () => { rebuildColliders(); refreshBuildMenu(); refreshMeasured(); save(); },
   nearbyStation: () => (loc?.base ? loc.base.stationAt(player.position) : null),
   availableStations: () => {
     const list = ['hands'];
@@ -759,13 +887,66 @@ initPanels({
 onRespawn(respawn);
 
 // Missions announce themselves; the HUD tracker handles the quiet updates.
+// An unlock is emitted immediately after the completion that caused it, so the
+// briefs are held back and staggered — otherwise they land on top of the
+// "complete" toast and each other.
+let unlockQueue = 0;
 onMissionEvent((mission, kind) => {
+  if (kind === 'unlocked') {
+    setTimeout(() => toast(`<b>New objective</b><br>${mission.brief}`, 'info'),
+      2200 + unlockQueue++ * 1600);
+    setTimeout(() => { unlockQueue = Math.max(0, unlockQueue - 1); }, 6000);
+    return;
+  }
   if (kind !== 'complete') return;
   const xp = mission.reward?.xp ?? 0;
-  toast(`<b>${mission.title}</b> — done${xp ? ` · +${xp} XP` : ''}`, 'info');
-  playSound('pickup', 1.15);
-  const next = activeMission();
-  if (next) setTimeout(() => toast(`<b>New objective</b><br>${next.brief}`, 'info'), 2200);
+  toast(`<b>${mission.title}</b> — complete${xp ? ` · +${xp} XP` : ''}`, 'info');
+  playSound('fanfare');
+
+  // A chapter turning over is a bigger moment than an objective closing, so it
+  // gets the stage to itself once the others have had their say.
+  //
+  // The test is against the finished mission's own chapter rather than a
+  // remembered one: if closing it moved the story into a different chapter, that
+  // is the crossing, and it needs no state that could go stale over a reload.
+  const chapter = currentChapter();
+  if (chapter && !mission.optional && chapter.n !== mission.chapter) {
+    setTimeout(() => toast(
+      `<b>Chapter ${chapter.n} — ${chapter.title}</b><br>${chapter.brief}`, 'info'), 4200);
+  }
+  save();
+});
+
+// A level is the game's biggest reward, so it gets more than a line of text: the
+// level itself, then what it opened, one item at a time so each is readable.
+onLevelUp(({ to, unlocked }) => {
+  toast(`<b>Level ${to}</b>`, 'info');
+  playSound('fanfare');
+  // Asked from the catalogue rather than taken from the event, so anything that
+  // became reachable because a *prerequisite* was met at the same moment is
+  // included, and nothing already announced can come round twice.
+  const fresh = takeNewUnlocks();
+  fresh.slice(0, 4).forEach((u, i) => setTimeout(() => toast(
+    `<b>${u.icon} ${u.title}</b><br><span style="opacity:.7">${u.desc}</span>`, 'info'),
+    900 + i * 1300));
+  if (fresh.length > 4) {
+    setTimeout(() => toast(`<b>+${fresh.length - 4} more unlocked</b>`, 'info'), 900 + 4 * 1300);
+  }
+  refreshBuildMenu();
+  refreshPanels();
+  save();
+});
+
+// Buying ground changes what the build ghost will accept, what the plot overlay
+// shows and what the menus offer, so everything that reads land is refreshed at
+// once rather than each polling for changes.
+onLandChange((plot) => {
+  toast(`<b>${plot.name} unlocked</b><br>${formatMoney(plot.price)} spent`, 'info');
+  playSound('fanfare');
+  loc.base?.refreshLandOverlay?.();
+  refreshBuildMenu();
+  refreshPanels();
+  rebuildColliders();
   save();
 });
 
@@ -795,6 +976,20 @@ function handlePanelKeys() {
     const name = cycleView();
     resetYaw(player);
     toast(`<b>View: ${VIEWS[name].name}</b><br>${VIEWS[name].note}`, 'info');
+  }
+  // Number keys pick a primary slot. Handled before the panel keys so switching
+  // works with the inventory open — you often want to see what you are doing.
+  for (let i = 0; i < SLOTS; i++) {
+    if (!input.consumePress(`Digit${i + 1}`)) continue;
+    selectSlot(i);
+    playSound('ui', 1.15);
+    refreshPanels();
+  }
+  if (input.consumePress('KeyO')) {
+    const mode = cycleAudio();
+    if (musicWanted()) startMusic(); else stopMusic();
+    if (mode !== 'off') playSound('ui');
+    toast(`<b>${MODE_LABEL[mode]}</b>`, 'info');
   }
   if (input.consumePress('KeyP')) {
     const name = cycleQuality();
@@ -856,6 +1051,18 @@ function frame() {
   // Only the close views steer by looking; overhead keeps walking by compass.
   player.lookYaw = viewName() !== 'overhead' && looking() ? lookYaw() : null;
   player.update(dt, input, colliders, !paused && !buildMode() && !searching);
+
+  // One place to hear damage, whatever landed it. Watching the bar rather than
+  // patching every source means starvation, poison and a walker all get a
+  // reaction, and the throttle stops a slow drain becoming a stutter.
+  if (state.hp < lastHp - 0.6 && hurtCooldown <= 0) {
+    playSound('hurt', rng.range(0.93, 1.08));
+    hurtCooldown = 0.7;
+  }
+  hurtCooldown -= dt;
+  lastHp = state.hp;
+
+  footsteps();
 
   // Death can come from any source (zombies, starvation, bad food) — catch it here
   // rather than in whichever system happened to land the last point of damage.
@@ -988,6 +1195,15 @@ window.game = {
   get player() { return player; },
   get loc() { return loc; },
   state, travelTo, renderer, camera,
+  // Recovery, reachable without a UI. `backup()` says what the older snapshot
+  // holds; `restore()` swaps it in and reloads. The replaced save becomes the
+  // new backup, so calling restore twice puts you back where you started and
+  // nothing is ever thrown away.
+  backup: backupInfo,
+  // Acceptance pass over currency, land and progression. Snapshots and restores
+  // everything it touches, so running it costs the player nothing.
+  selftest: (opts) => selftest(opts),
+  restore: () => { const ok = restoreBackup(); if (ok) location.reload(); return ok; },
 };
 
 function resize() {
@@ -1014,6 +1230,22 @@ addEventListener('beforeunload', () => {
 const HANDOUTS = [
   { id: 'ak74', items: [{ id: 'ak74', n: 1 }, { id: 'ammo_545', n: 180 }], say: 'AK-74 · 180 rounds' },
 ];
+
+// Test money.
+//
+// $SURV is a local, non-tradeable in-game currency in this build — there is no
+// wallet, no chain and no way to move it anywhere. The opening balance exists so
+// every land expansion can be exercised without first grinding for it, and it is
+// paid through grantOnce so reloading, or running startup twice, cannot pay it
+// again. Ship-ready builds drop this to whatever the economy actually wants.
+const TEST_FUNDS = 1_000_000;
+
+function grantTestFunds() {
+  if (grantOnce('surv_test_funds', TEST_FUNDS)) {
+    setTimeout(() => toast(
+      `<b>${formatMoney(TEST_FUNDS)}</b><br>Test balance for unlocking land`, 'info'), 3000);
+  }
+}
 
 function deliverHandouts() {
   state.granted = state.granted ?? [];
@@ -1077,8 +1309,18 @@ if (assets.missing.length) {
 const returning = load();
 resizeInventory();
 migrateBase();
+// The land cache is built from the save, so it has to be rebuilt after loading
+// one. Before this line the player owns whatever the last session owned.
+refreshLand();
+// A fresh game has no save to load, so the hand is linked here too.
+syncHand();
 ensureStarterPlot();
 deliverHandouts();
+grantTestFunds();
+// Everything already earned counts as old news. Without this a returning player
+// is told about every recipe and piece they unlocked in previous sessions the
+// first time they gain a level.
+primeUnlocks();
 initBuildMenu(() => builder);
 
 // Build a character before the world exists. Keyed off the character itself,

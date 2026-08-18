@@ -2,6 +2,8 @@ import { state } from '../core/state.js';
 import { countItem } from '../core/inventory.js';
 import { ITEMS } from '../data/items.js';
 import { BUILDING, BUILD_TABS, blueprintsIn } from '../data/building.js';
+import { playSound } from '../core/audio.js';
+import { openPanel } from './panels.js';
 
 // The build menu, and the strip along the bottom while you're placing.
 //
@@ -18,16 +20,19 @@ let tab = BUILD_TABS[0].id;
 export function initBuildMenu(controllerFn) {
   getCtrl = controllerFn;
   $('bm-close').addEventListener('click', () => close());
+  $('bm-land').addEventListener('click', openLand);
   $('bm-tabs').addEventListener('click', (e) => {
     const t = e.target.closest('[data-tab]');
     if (!t) return;
     tab = t.dataset.tab;
+    playSound('ui', 1.1);
     render();
   });
   $('bm-list').addEventListener('click', (e) => {
     const card = e.target.closest('[data-bp]');
     if (!card) return;
     getCtrl()?.select(card.dataset.bp);
+    playSound('ui');
     close();
     renderHint();
   });
@@ -36,8 +41,16 @@ export function initBuildMenu(controllerFn) {
 export function isBuildMenuOpen() { return $('buildmenu').classList.contains('on'); }
 
 export function open() {
+  if (!isBuildMenuOpen()) playSound('ui');
   $('buildmenu').classList.add('on');
   render();
+}
+
+/** Opens the land panel from the build menu — the two belong to the same job. */
+function openLand() {
+  close();
+  playSound('ui');
+  openPanel('land');
 }
 
 export function close() {
@@ -77,7 +90,7 @@ function render() {
       <div class="bm-icon">${bp.icon}</div>
       <div class="bm-body">
         <div class="bm-name">${bp.label}</div>
-        <div class="bm-hint">${locked ? gate : bp.hint}</div>
+        <div class="${locked ? 'gate' : 'bm-hint'}">${locked ? `🔒 ${gate}` : bp.hint}</div>
         <div class="bm-costs">${cost}</div>
       </div>
     </div>`;

@@ -42,7 +42,11 @@
   .region .energy { font-size: 11px; margin-top: 5px; opacity: .8; }
 
   /* ---------- bottom ---------- */
-  .loadout { position: absolute; bottom: 16px; left: 16px; display: flex; gap: 7px; align-items: flex-end; }
+  /* Stacked, not in a row: with the hotbar alongside them the chips reached far
+     enough across a narrow window to run into the key hints on the right. */
+  .loadout { position: absolute; bottom: 16px; left: 16px; display: flex;
+    flex-direction: column; gap: 6px; align-items: flex-start; }
+  .loadout .chips { display: flex; gap: 7px; align-items: flex-end; }
   .chip { background: rgba(0,0,0,.6); border: 1px solid rgba(255,255,255,.16); border-radius: 2px; padding: 6px 9px; }
   .chip b { display: block; font-size: 8px; letter-spacing: .12em; opacity: .5; font-weight: 500; }
   .chip em { font-style: normal; font-size: 13px; font-weight: 600; }
@@ -52,22 +56,83 @@
   .durbar.low > i { background: #e2a04a; }
   .durbar.crit > i { background: #e2624a; }
 
-  /* Objective tracker: sits under the region header, top right. Deliberately
-     quiet — it should be readable at a glance and ignorable the rest of the time. */
-  #mission { position: absolute; top: 96px; right: 18px; width: 210px; text-align: right;
-    font-size: 11px; letter-spacing: .04em; pointer-events: none;
-    text-shadow: 0 1px 3px rgba(0,0,0,.85); transition: opacity .3s; }
+  /* Objective tracker: top right, under the region header.
+     
+     It used to be bare right-aligned text over the world, which is legible over
+     a dark treeline and almost gone over sunlit grass — a tracker you have to
+     hunt for is not a tracker. It is a panel now: its own dark ground, so
+     contrast never depends on what is behind it, and left-aligned so the eye has
+     one edge to run down instead of a ragged one. Every goal carries a thin bar,
+     which is read in a glance where "24/84" has to be read as numbers. */
+  #mission { position: absolute; top: 92px; right: 16px; width: 226px;
+    padding: 8px 10px 9px; border-radius: 4px; pointer-events: none;
+    background: rgba(12,13,15,.72); border: 1px solid rgba(255,255,255,.1);
+    box-shadow: 0 4px 18px rgba(0,0,0,.45);
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+    font-size: 11px; letter-spacing: .02em; line-height: 1.35;
+    transition: opacity .3s; }
   #mission.hide { opacity: 0; }
-  #mission .mtitle { display: flex; gap: 7px; justify-content: flex-end; align-items: baseline; margin-bottom: 5px; }
-  #mission .mtag { font-size: 8.5px; opacity: .45; letter-spacing: .18em; }
-  #mission b { font-weight: 600; font-size: 12px; }
-  #mission .goal { display: flex; gap: 8px; justify-content: flex-end; align-items: baseline;
-    opacity: .78; line-height: 1.65; }
-  #mission .goal.done { opacity: .4; }
-  #mission .goal.done span { text-decoration: line-through; }
-  #mission .goal i { font-style: normal; opacity: .6; font-variant-numeric: tabular-nums; font-size: 10px; }
-  #mission .mhint { margin-top: 6px; font-size: 10px; opacity: .42; line-height: 1.5; }
+
+  /* Chapter and position share one row: both are "where am I", neither is worth
+     a line of its own. */
+  #mission .mhead { display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8px; font-size: 8.5px; letter-spacing: .16em; color: #8d9199; margin-bottom: 3px; }
+  #mission .mhead b { font-weight: 600; color: #b9bec6; font-variant-numeric: tabular-nums;
+    letter-spacing: .06em; }
+  #mission #mission-title { display: block; font-weight: 600; font-size: 12.5px;
+    letter-spacing: .01em; color: #f2efe9; margin-bottom: 6px; line-height: 1.25; }
+
+  #chip-surv em { color: #e6c877; }
+
+  /* Primary slots. Two of them, switched with 1 and 2 — a survival game asks you
+     to alternate between an axe and a pickaxe constantly, and the number badge is
+     there so the key to press is on the thing itself. */
+  .hotbar { display: flex; gap: 5px; }
+  .hslot { position: relative; min-width: 96px; padding: 6px 9px 7px; border-radius: 3px;
+    background: rgba(12,13,15,.62); border: 1px solid rgba(255,255,255,.12);
+    display: flex; align-items: center; gap: 7px; transition: border-color .12s, background .12s; }
+  .hslot.on { border-color: #d2a545; background: rgba(210,165,69,.16); }
+  .hslot .num { font-size: 9px; font-weight: 700; letter-spacing: .1em; opacity: .45;
+    border: 1px solid rgba(255,255,255,.22); border-radius: 2px; padding: 1px 4px; flex: none; }
+  .hslot.on .num { opacity: .95; border-color: rgba(210,165,69,.7); color: #e6c877; }
+  .hslot .ic { font-size: 15px; line-height: 1; flex: none; }
+  .hslot .nm { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
+  .hslot.empty .nm { opacity: .35; font-weight: 400; }
+  .hslot .dur { position: absolute; left: 6px; right: 6px; bottom: 3px; height: 2px;
+    background: rgba(255,255,255,.14); border-radius: 1px; overflow: hidden; }
+  .hslot .dur > i { display: block; height: 100%; background: #7fb069; }
+  .hslot .dur.low > i { background: #d2a545; }
+  .hslot .dur.crit > i { background: #c9503f; }
+  #mission .goal { margin-bottom: 5px; }
+  #mission .goal.plain { margin-bottom: 2px; }
+  #mission .goal .row { display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8px; color: #d7d3cb; }
+  #mission .goal i { font-style: normal; font-size: 10px; color: #9aa0a8;
+    font-variant-numeric: tabular-nums; flex: none; }
+  /* The bar is the fast read; the numbers are there when you want the detail. */
+  #mission .goal .bar { height: 2px; margin-top: 3px; border-radius: 1px;
+    background: rgba(255,255,255,.1); overflow: hidden; }
+  #mission .goal .bar > u { display: block; height: 100%; background: #c9a44c;
+    transition: width .25s ease-out; }
+  #mission .goal.done .row { color: #7f858c; }
+  #mission .goal.done .row span { text-decoration: line-through; }
+  #mission .goal.done .bar > u { background: #6f9b4a; }
+
+  /* What the rest of a goal will cost. */
+  #mission .gnote { font-size: 9.5px; color: #c9a44c; opacity: .85; margin-top: 3px; }
+  #mission .mhint { margin-top: 5px; padding-top: 5px; font-size: 9.5px; color: #8d9199;
+    line-height: 1.45; border-top: 1px solid rgba(255,255,255,.07); }
   #mission .mhint kbd { font-size: 9px; }
+  /* Held on screen for a beat when the last goal ticks over, so completion reads
+     as an event rather than the tracker quietly changing its mind. */
+  #mission .mdone { margin-top: 5px; font-size: 9.5px; font-weight: 600; letter-spacing: .14em;
+    color: #9fd88b; }
+
+  #mission .mside { margin-top: 7px; padding-top: 6px;
+    border-top: 1px solid rgba(255,255,255,.1); }
+  #mission .mside .mhead { margin-bottom: 2px; }
+  #mission .mside .stitle { font-weight: 600; font-size: 11px; color: #cfcbc3; margin-bottom: 4px; }
 
   #prompt { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); text-align: center;
             background: rgba(0,0,0,.7); border: 1px solid rgba(255,255,255,.22); border-radius: 3px;
@@ -109,15 +174,77 @@
   /* inventory grid */
   .invwrap { display: grid; grid-template-columns: 1fr 210px; gap: 16px; }
   .grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
+  /* Unlock catalogue: everything the game has to give, in the order it gives it.
+     Grouped by level, because the level is the thing the player is working on —
+     a flat A-to-Z list would answer "what exists" and never "what is next". */
+  .lvgroup { margin-bottom: 16px; }
+  .lvgroup > .lvhead { display: flex; align-items: baseline; gap: 9px; margin-bottom: 7px;
+    padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,.12); }
+  .lvgroup > .lvhead b { font-size: 12px; letter-spacing: .16em; }
+  .lvgroup > .lvhead .cnt { font-size: 10px; opacity: .45; margin-left: auto; }
+  .lvgroup.reached > .lvhead b { color: #9fd88b; }
+  .lvgroup.locked > .lvhead b { color: #d2a545; }
+  .ugrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 6px; }
+  .ucard { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; border-radius: 3px;
+    background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.09); }
+  .ucard .uic { font-size: 19px; line-height: 1; flex: none; width: 22px; text-align: center; }
+  .ucard .un { font-size: 11.5px; font-weight: 600; line-height: 1.3; }
+  .ucard .ud { font-size: 10px; opacity: .55; line-height: 1.4; margin-top: 2px; }
+  .ucard .ut { font-size: 8.5px; letter-spacing: .12em; opacity: .4; margin-top: 3px; }
+  .ucard.open { border-color: rgba(127,176,105,.4); }
+  .ucard.shut { opacity: .5; }
+  .ucard.shut .uic { filter: grayscale(1); }
+
+  /* Land panel: the plot grid as it sits in the world, so the square you click
+     is the ground you are looking at. North is up, matching the overhead view. */
+  .landgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+    max-width: 340px; margin: 0 auto 14px; }
+  .lp { aspect-ratio: 1; border-radius: 3px; border: 1px solid rgba(255,255,255,.14);
+    background: rgba(255,255,255,.04); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px; cursor: pointer;
+    padding: 6px; text-align: center; transition: background .12s, border-color .12s; }
+  .lp:hover { background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.32); }
+  .lp .lpn { font-size: 9.5px; letter-spacing: .04em; opacity: .8; line-height: 1.25; }
+  .lp .lpp { font-size: 10px; font-variant-numeric: tabular-nums; color: #d2a545; }
+  .lp.owned { border-color: rgba(127,176,105,.6); background: rgba(127,176,105,.14); }
+  .lp.owned .lpp { color: #9fd88b; }
+  .lp.home { border-color: rgba(255,255,255,.4); background: rgba(255,255,255,.1); }
+  .lp.locked-lvl { opacity: .55; }
+  .lp.sel { outline: 1px solid #d2a545; outline-offset: 1px; }
+  .landinfo { min-height: 92px; border-top: 1px solid rgba(255,255,255,.1); padding-top: 12px; }
+  .landinfo h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+  .landinfo .row { display: flex; justify-content: space-between; font-size: 11px;
+    opacity: .75; line-height: 1.7; }
+  .landinfo .why { font-size: 11px; color: #d98b6a; margin-top: 6px; }
+  .landinfo .owned { font-size: 11px; color: #9fd88b; margin-top: 6px; }
+
+  /* Why a recipe or a piece cannot be made yet — stated, not implied by a
+     greyed-out button nobody can read a reason from. */
+  .rec .gate, .bm-card .gate { font-size: 10.5px; color: #d2a545; opacity: .9;
+    letter-spacing: .02em; margin: 4px 0 2px; }
+
   .cell { aspect-ratio: 1; background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.1);
           border-radius: 2px; position: relative; cursor: pointer; display: flex; align-items: center;
-          justify-content: center; font-size: 21px; transition: background .1s, border-color .1s; }
+          justify-content: center; font-size: 21px; transition: background .1s, border-color .1s;
+          /* the drag is driven by pointer events, so the browser must not claim
+             the gesture for scrolling first */
+          touch-action: none; -webkit-user-select: none; user-select: none; }
   .cell:hover { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.3); }
   .cell.sel { border-color: #d2a545; background: rgba(210,165,69,.14); }
   .cell.empty { cursor: default; }
   .cell .n { position: absolute; right: 3px; bottom: 1px; font-size: 10px; font-weight: 700; text-shadow: 0 1px 3px #000; }
   .cell .d { position: absolute; left: 3px; right: 3px; bottom: 3px; height: 2px; background: rgba(255,255,255,.2); }
   .cell .d > i { display: block; height: 100%; background: #7fb069; }
+  /* The slot a drag came from: dimmed, so it reads as picked up rather than
+     copied, while the ghost under the cursor carries the item. */
+  .cell.dragging { opacity: .3; }
+  .cell.drop { border-color: #d2a545; background: rgba(210,165,69,.2); box-shadow: 0 0 0 1px #d2a545 inset; }
+  #dragghost { position: fixed; z-index: 60; pointer-events: none; transform: translate(-50%, -50%);
+    width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;
+    font-size: 21px; border-radius: 3px; background: rgba(20,20,22,.85);
+    border: 1px solid rgba(210,165,69,.75); box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+  #dragghost .n { position: absolute; right: 3px; bottom: 1px; font-size: 10px; font-weight: 700;
+    text-shadow: 0 1px 3px #000; }
 
   .equip { display: flex; flex-direction: column; gap: 6px; }
   .eslot { display: flex; align-items: center; gap: 9px; background: rgba(255,255,255,.045);
@@ -204,6 +331,9 @@
   .bm-tab { font-size: 10px; letter-spacing: .16em; padding: 6px 12px; cursor: pointer;
             border: 1px solid rgba(255,255,255,.12); border-radius: 2px; opacity: .55; }
   .bm-tab.on { opacity: 1; border-color: #d2a545; color: #d2a545; }
+  #bm-land { margin-left: 6px; border: 1px solid rgba(210,165,69,.5); color: #e6c877;
+    background: rgba(210,165,69,.1); font: inherit; }
+  #bm-land:hover { background: rgba(210,165,69,.2); }
   #bm-close { font-size: 16px; opacity: .5; cursor: pointer; padding: 0 4px; }
   #bm-list { overflow-y: auto; padding: 12px; display: grid; gap: 8px;
              grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
@@ -285,15 +415,22 @@
     <div class="energy" id="energy">⚡ 100 / 100</div>
   </div>
 
-  <div id="mission">
-    <div class="mtitle"><span class="mtag">OBJECTIVE</span><b id="mission-title"></b></div>
+  <!-- Starts hidden: the panel has a ground of its own now, so an empty one
+       would sit on screen as a blank box through the whole loading screen. -->
+  <div id="mission" class="hide">
+    <div class="mhead"><span id="mission-chapter"></span><b id="mission-step"></b></div>
+    <b id="mission-title"></b>
     <div id="mission-goals"></div>
+    <div id="mission-side"></div>
   </div>
 
   <div class="loadout">
-    <div class="chip" id="chip-weapon"><b>WEAPON</b><em>Fists</em><div class="durbar" style="display:none"><i></i></div></div>
-    <div class="chip" id="chip-weight"><b>LOAD</b><em>0 / 22 kg</em></div>
-    <div class="chip" id="chip-armor"><b>ARMOR</b><em>0%</em></div>
+    <div class="hotbar" id="hotbar"></div>
+    <div class="chips">
+      <div class="chip" id="chip-surv"><b>$SURV</b><em>0</em></div>
+      <div class="chip" id="chip-weight"><b>LOAD</b><em>0 / 22 kg</em></div>
+      <div class="chip" id="chip-armor"><b>ARMOR</b><em>0%</em></div>
+    </div>
   </div>
 
   <div id="prompt"><span id="prompt-text"></span><div id="searchbar"><i></i></div></div>
@@ -301,7 +438,7 @@
   <div id="keys">
     <kbd>WASD</kbd> move &middot; <kbd>&larr;&uarr;&darr;&rarr;</kbd> look &middot; <kbd>J</kbd> jog &middot; <kbd>SHIFT</kbd> sprint &middot; <kbd>SPACE</kbd> attack<br>
     <kbd>E</kbd> interact &middot; <kbd>TAB</kbd> inventory &middot; <kbd>C</kbd> craft<br>
-    <kbd>M</kbd> map &middot; <kbd>B</kbd> build &middot; <kbd>V</kbd> view &middot; <kbd>P</kbd> graphics &middot; <kbd>ESC</kbd> close
+    <kbd>M</kbd> map &middot; <kbd>B</kbd> build &middot; <kbd>V</kbd> view &middot; <kbd>P</kbd> graphics &middot; <kbd>O</kbd> sound &middot; <kbd>ESC</kbd> close
   </div>
 
   <div id="crosshair"></div>
@@ -315,6 +452,7 @@
     <div class="bmhead">
       <h3>BUILD</h3>
       <div id="bm-tabs"></div>
+      <button class="bm-tab" id="bm-land" title="Buy more ground to build on">&#127757; LAND</button>
       <div id="bm-close">&times;</div>
     </div>
     <div id="bm-list"></div>
@@ -326,7 +464,7 @@
   <div class="panel" id="p-inv">
     <div class="phead">
       <h3>INVENTORY</h3>
-      <div class="tabs"><button class="tab" data-goto="craft">CRAFTING</button></div>
+      <div class="tabs"><button class="tab" data-goto="craft">CRAFTING</button><button class="tab" data-goto="unlocks">UNLOCKS</button></div>
       <div class="sub" id="inv-sub"></div>
     </div>
     <div class="pbody">
@@ -342,7 +480,7 @@
 
   <!-- STORAGE -->
   <div class="panel" id="p-store">
-    <div class="phead"><h3>STORAGE BOX</h3><div class="sub">click an item to move it</div></div>
+    <div class="phead"><h3>STORAGE BOX</h3><div class="sub">click to move it across &middot; drag to place it</div></div>
     <div class="pbody">
       <div style="font-size:10px;letter-spacing:.14em;opacity:.5;margin-bottom:7px">BOX</div>
       <div class="grid" id="store-grid"></div>
@@ -362,6 +500,23 @@
   </div>
 
   <!-- MAP -->
+  <div class="panel" id="p-unlocks">
+    <div class="phead">
+      <h3>UNLOCKS</h3>
+      <div class="tabs" id="unlock-tabs"></div>
+      <div class="sub" id="unlocks-sub"></div>
+    </div>
+    <div class="pbody"><div id="unlocks-list"></div></div>
+  </div>
+
+  <div class="panel" id="p-land">
+    <div class="phead"><h3>LAND</h3><div class="sub" id="land-balance"></div></div>
+    <div class="pbody">
+      <div class="landgrid" id="land-grid"></div>
+      <div class="landinfo" id="land-info"></div>
+    </div>
+  </div>
+
   <div class="panel" id="p-map">
     <div class="phead"><h3>WORLD MAP</h3><div class="sub" id="map-sub"></div></div>
     <div class="pbody"><div class="locs" id="map-list"></div></div>

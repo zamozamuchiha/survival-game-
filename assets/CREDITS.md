@@ -7,8 +7,18 @@ not legally required, but it is recorded here anyway.
 - **Nature Kit** — 329 models: trees, rocks, bushes, grass, flowers, and
   `ground_grass` — the 1x1 tile the whole terrain plane is built from
 - **Survival Kit** — 80 models: crates, barrels, chests, campfire, workbench, structures, tools
-- **Car Kit** — 50 models: vehicles used as wrecks, plus debris
+- **Car Kit** — 50 models: the debris parts (tyres, doors, bumpers, plates,
+  cones) scattered around the wrecks. The cars themselves were replaced — see
+  Quaternius below.
 - **Blocky Characters** — downloaded, no longer used (replaced by skinned humanoids)
+
+## Quaternius — https://quaternius.com (CC0)
+- **Zombie Apocalypse Kit** — the three vehicle bodies (`q_Sports`, `q_Pickup`,
+  `q_Truck`). Roughly 6,000 triangles each against the 2,000 of the kit they
+  replaced, with a real body texture rather than a palette atlas. The armoured
+  variants in the same pack are deliberately unused: spiked plating is a louder
+  post-apocalypse than this game wants.
+  Licence text shipped alongside at `assets/models/cars/QUATERNIUS_LICENSE.txt`.
 
 ## three.js examples — https://github.com/mrdoob/three.js
 - **Soldier.glb**, **Xbot.glb** — Mixamo-derived skinned humanoids.

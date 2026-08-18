@@ -1,4 +1,6 @@
-import { state, level } from './state.js';
+import { state } from './state.js';
+import { isUnlocked, lockReason } from './progress.js';
+import { buildUnlockId } from '../data/unlocks.js';
 import { countItem, removeItem, addItem } from './inventory.js';
 import { BUILDING, blueprint, refundFor } from '../data/building.js';
 
@@ -75,10 +77,20 @@ export class BuildController {
   }
 
   /** true, or why this blueprint is off the menu right now. */
+  /**
+   * Whether the player may select this piece at all — level and prerequisites.
+   *
+   * The level test goes through the unlock catalogue rather than reading bp.lvl
+   * here, so the crafting menu, the build menu and the level-up notice all agree
+   * about what is open. Standing at the right station is a separate question:
+   * that changes as you walk around, and is about *where* you are rather than
+   * what you have earned.
+   */
   unlocked(id) {
     const bp = blueprint(id);
     if (!bp) return 'Unknown';
-    if (bp.lvl && level().lvl < bp.lvl) return `Requires level ${bp.lvl}`;
+    const gate = lockReason(buildUnlockId(id));
+    if (gate) return gate;
     if (bp.needs && this.station() !== bp.needs) return `Requires a ${bp.needs}`;
     return true;
   }
@@ -130,6 +142,17 @@ export class BuildController {
     const t = this.target;
     if (!t) return { ok: false, msg: 'Nowhere to put that' };
     if (!t.ok) return { ok: false, msg: t.reason ?? 'Can\'t build there' };
+
+    // Re-checked here rather than trusting `t.ok`, which was decided by the last
+    // aim() call. This is the only place that spends materials and the only one
+    // that puts a piece in the world, so it is the only one entitled to decide a
+    // placement is legal — and between aiming and clicking the player can level
+    // up, spend the materials elsewhere, or have the ground sold out from under
+    // the cursor.
+    const gate = this.unlocked(this.selected);
+    if (gate !== true) return { ok: false, msg: gate };
+    const spot = this.base.checkPlace(this.selected, t);
+    if (spot !== true) return { ok: false, msg: spot };
 
     const bp = blueprint(this.selected);
     for (const [res, n] of Object.entries(bp.cost)) {

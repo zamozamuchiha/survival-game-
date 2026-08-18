@@ -1,5 +1,5 @@
 import { ITEMS } from '../data/items.js';
-import { levelFromXp } from '../data/recipes.js';
+import { levelFromXp } from '../data/progression.js';
 import { ENERGY_MAX } from '../data/locations.js';
 import { makeSlots, totalWeight } from './inventory.js';
 
@@ -14,7 +14,11 @@ export const state = {
   energy: ENERGY_MAX,
 
   inv: makeSlots(BASE_SLOTS),
+  // `equip.weapon` is whatever the active hotbar slot holds — see core/hotbar.js,
+  // which is the only thing that writes it.
   equip: { weapon: null, head: null, body: null, feet: null, back: null },
+  // Two primary slots, switched with the number keys. { slots: [a, b], active }
+  hotbar: null,
 
   // Chosen in the character creator on first run.
   character: { body: 'female', name: 'Survivor', tint: 0x4a6b7a, created: false },
@@ -22,8 +26,17 @@ export const state = {
   locationId: 'home',
   timeLeft: 0,
 
-  // { active, done: [ids], progress: { goalIndex: count } } — see core/missions.js
+  // { done: [ids], progress: { missionId: [countPerGoal] }, seen: [ids] }
+  // Status is derived from done[] + requires[], never stored — see core/missions.js
   missions: null,
+
+  // Currency ledger, keyed by currency id — see core/wallet.js. Not an inventory
+  // item on purpose: money has no weight and must not take a bag slot.
+  wallet: null,    // { surv_token: n }
+  // Ids of the land plots bought — see data/land.js. The home plot is implied.
+  land: null,      // [plotId]
+  // Unlocks the player has already been shown, so nothing is announced twice.
+  unlocksSeen: null,
 
   base: {},        // "x,z" -> { item, build, hp, station?, contents? }
   graves: {},      // locationId -> [{ id, n, dur }]

@@ -59,7 +59,10 @@ export const BUILDING = {
   },
   wall_wood: {
     item: 'wall_wood', label: 'Wood wall', icon: '🪵', layer: 'wall',
-    cost: { wood: 10, stone: 2 }, hint: 'Requires a floor.',
+    // Walls are bought by the dozen — a 3x3 deck needs twelve to close it — so
+    // they are priced per panel, near the floor they stand on, rather than as a
+    // single big-ticket piece. Fence 5 < floor 6 < wall 7 < foundation 8 < door 12.
+    cost: { wood: 7, stone: 1 }, hint: 'Requires a floor.',
     models: ['plank_wall_a', 'plank_wall_b', 'plank_wall_c'],
     hp: 350, solid: 0.12, clears: 0.45,
   },

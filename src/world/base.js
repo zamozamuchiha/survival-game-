@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { state } from '../core/state.js';
+import { isBuildableCell, refusalFor, isUnlocked as isPlotUnlocked, plotAt as landPlotAt }
+  from '../core/land.js';
+import { PLOTS, LAND_HALF_CELLS } from '../data/land.js';
 import { makeSlots } from '../core/inventory.js';
 import { getModel } from './models.js';
 import {
@@ -36,7 +39,10 @@ export const wallKey = (gx, gz, side) => `wall:${gx},${gz},${side}`;
 
 export const worldToCell = (x, z) => [Math.round(x / CELL), Math.round(z / CELL)];
 export const cellToWorld = (gx, gz) => new THREE.Vector3(gx * CELL, 0, gz * CELL);
-export const inPlot = (gx, gz) => Math.abs(gx) <= PLOT && Math.abs(gz) <= PLOT;
+// Whether a cell may be built on at all. The answer now comes from the land
+// system — the buildable area is the plots you own, not one fixed rectangle —
+// but the name stays so nothing that already asks this question has to change.
+export const inPlot = (gx, gz) => isBuildableCell(gx, gz);
 
 /** Splits a socket key back into its parts. */
 export function parseKey(key) {
@@ -72,6 +78,29 @@ const cellEdges = (gx, gz) => [
   { layer: 'wall', socket: 'edge', gx, gz, side: 'w' },
   { layer: 'wall', socket: 'edge', gx: gx + 1, gz, side: 'w' },
 ];
+
+/**
+ * Whether a socket sits on ground the player owns.
+ *
+ * A wall socket is named after a cell boundary, and the boundary on the outer
+ * face of the outermost cell has a coordinate one past the land itself — so
+ * asking "is cell (8,3) mine?" would refuse the player the right to wall the
+ * edge of their own plot. An edge belongs to the two cells it separates, and
+ * owning either of them is enough to build on it.
+ *
+ * The land system also distinguishes "off the map" from "not bought yet", and
+ * the second is worth saying out loud: it is something the player can act on.
+ */
+function landCheck(t) {
+  const cells = t.socket === 'edge'
+    ? SIDES[t.side].cells.map(([dx, dz]) => [t.gx + dx, t.gz + dz])
+    : [[t.gx, t.gz]];
+  if (cells.some(([gx, gz]) => isBuildableCell(gx, gz))) return true;
+  // Report the friendliest refusal of the candidates: "not yours yet" beats
+  // "off the map" when one of the two cells is a plot going spare.
+  const reasons = cells.map(([gx, gz]) => refusalFor(gx, gz));
+  return reasons.find((r) => r !== 'Outside your plot') ?? reasons[0];
+}
 
 /** Cells from the camp centre that come already decked. A 3x3, so 6x6 metres. */
 const STARTER_PLOT = 1;
@@ -215,6 +244,14 @@ export class Base {
     this.gridHelper.visible = false;
     scene.add(this.gridHelper);
 
+    // Which ground is yours, drawn flat on the floor. Only visible in build
+    // mode: land you own is a building concern, and a world permanently ruled
+    // into coloured squares is a worse world to look at.
+    this.landOverlay = new THREE.Group();
+    this.landOverlay.visible = false;
+    scene.add(this.landOverlay);
+    this.refreshLandOverlay();
+
     this.ghost = new THREE.Group();
     this.ghost.visible = false;
     scene.add(this.ghost);
@@ -236,8 +273,11 @@ export class Base {
 
   makeGrid() {
     const g = new THREE.Group();
-    const size = PLOT * 2 * CELL + CELL;
-    const grid = new THREE.GridHelper(size, PLOT * 2 + 1, 0x9fd8a0, 0x486b4c);
+    // Sized to the land grid, not to some larger nominal plot: a grid drawn over
+    // ground nobody can ever build on is an invitation to try.
+    const cells = LAND_HALF_CELLS * 2 + 1;
+    const size = cells * CELL;
+    const grid = new THREE.GridHelper(size, cells, 0x9fd8a0, 0x486b4c);
     grid.position.y = 0.02;
     grid.material.opacity = 0.22;
     grid.material.transparent = true;
@@ -323,7 +363,8 @@ export class Base {
   /** true, or the reason this blueprint can't go in this socket. */
   checkPlace(id, t) {
     const bp = blueprint(id);
-    if (!inPlot(t.gx, t.gz)) return 'Outside your plot';
+    const land = landCheck(t);
+    if (land !== true) return land;
     if (state.base[keyOf(t)]) return 'Something is already here';
 
     const support = canSupport(bp, t);
@@ -416,6 +457,44 @@ export class Base {
    * of one — and the end circles sit near enough to the cell corner that the next
    * wall's end circle closes the join.
    */
+  /**
+   * How far the deck is walled in.
+   *
+   * The perimeter is worked out from the floor itself rather than fixed in the
+   * mission: every floor square contributes the edges that face open ground, and
+   * a seam between two floor squares needs nothing. Extend the deck and the
+   * target grows with it; a door counts as closing its edge just like a wall,
+   * because anything sitting in a wall socket is part of the shell.
+   *
+   * @returns {{ have: number, need: number }} walled edges, and edges in total
+   */
+  enclosure() {
+    const floors = new Set();
+    for (const key of Object.keys(state.base)) {
+      const t = parseKey(key);
+      if (t.layer === 'floor') floors.add(`${t.gx},${t.gz}`);
+    }
+    if (!floors.size) return { have: 0, need: 0 };
+
+    let have = 0;
+    const counted = new Set();
+    for (const cell of floors) {
+      const [gx, gz] = cell.split(',').map(Number);
+      for (const edge of cellEdges(gx, gz)) {
+        // The two squares this boundary separates; the one that is not us is
+        // what decides whether the edge faces outside.
+        const pair = SIDES[edge.side].cells.map(([dx, dz]) => `${edge.gx + dx},${edge.gz + dz}`);
+        if (pair.every((c) => floors.has(c))) continue;   // interior seam
+
+        const key = keyOf(edge);
+        if (counted.has(key)) continue;
+        counted.add(key);
+        if (state.base[key]) have++;
+      }
+    }
+    return { have, need: counted.size };
+  }
+
   colliders() {
     const out = [];
     for (const [key, cell] of Object.entries(state.base)) {
@@ -557,7 +636,65 @@ export class Base {
 
   setBuildMode(on) {
     this.gridHelper.visible = on;
+    this.landOverlay.visible = on;
     if (!on) { this.hideGhost(); this.removeMarker.visible = false; }
+  }
+
+  /**
+   * Draws one marker per plot: a filled square for ground you do not own yet,
+   * an outline for ground you do.
+   *
+   * Rebuilt wholesale rather than patched, because a purchase changes at most
+   * nine small objects and the alternative is bookkeeping that can go out of
+   * step with the land system.
+   */
+  refreshLandOverlay() {
+    if (!this.landOverlay) return;
+    for (const child of [...this.landOverlay.children]) {
+      this.landOverlay.remove(child);
+      child.geometry?.dispose?.();
+      child.material?.dispose?.();
+    }
+
+    for (const plot of PLOTS) {
+      const owned = isPlotUnlocked(plot.id);
+      const w = (plot.max.gx - plot.min.gx + 1) * CELL;
+      const d = (plot.max.gz - plot.min.gz + 1) * CELL;
+      const cx = ((plot.min.gx + plot.max.gx) / 2) * CELL;
+      const cz = ((plot.min.gz + plot.max.gz) / 2) * CELL;
+
+      if (!owned) {
+        // A wash of colour, low enough to read as ground rather than as a wall.
+        const fill = new THREE.Mesh(
+          new THREE.PlaneGeometry(w - 0.3, d - 0.3),
+          new THREE.MeshBasicMaterial({
+            color: 0xd88a3a, transparent: true, opacity: 0.11,
+            depthWrite: false, side: THREE.DoubleSide,
+          }));
+        fill.rotation.x = -Math.PI / 2;
+        fill.position.set(cx, 0.03, cz);
+        fill.userData.plotId = plot.id;
+        this.landOverlay.add(fill);
+      }
+
+      const edge = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.PlaneGeometry(w - 0.3, d - 0.3)),
+        new THREE.LineBasicMaterial({
+          color: owned ? 0x9fd8a0 : 0xe0a44a,
+          transparent: true, opacity: owned ? 0.5 : 0.9,
+        }));
+      edge.rotation.x = -Math.PI / 2;
+      edge.position.set(cx, 0.04, cz);
+      edge.userData.plotId = plot.id;
+      this.landOverlay.add(edge);
+    }
+  }
+
+  /** Which plot the cursor is over, for the buy panel. */
+  plotAtPoint(point) {
+    if (!point) return null;
+    const [gx, gz] = worldToCell(point.x, point.z);
+    return landPlotAt(gx, gz);
   }
 
   // ---- per-frame ------------------------------------------------------

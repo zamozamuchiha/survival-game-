@@ -52,11 +52,7 @@ export const RECIPES = [
   { station: 'furnace', lvl: 5, xp: 6,  time: 3.0, out: { id: 'iron_bar', n: 1 }, in: [{ id: 'iron_ore', n: 2 }, { id: 'coal', n: 1 }] },
 ];
 
-export const XP_PER_LEVEL = (lvl) => Math.round(45 * Math.pow(lvl, 1.45));
-
-export function levelFromXp(xp) {
-  let lvl = 1;
-  let spent = 0;
-  while (spent + XP_PER_LEVEL(lvl) <= xp) { spent += XP_PER_LEVEL(lvl); lvl++; }
-  return { lvl, into: xp - spent, need: XP_PER_LEVEL(lvl) };
-}
+// The curve moved to data/progression.js once levels started gating building and
+// land as well as recipes. Re-exported so nothing that already imports it here
+// has to change.
+export { XP_PER_LEVEL, levelFromXp, xpForLevel, MAX_LEVEL } from './progression.js';
